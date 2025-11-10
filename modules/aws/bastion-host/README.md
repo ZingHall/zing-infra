@@ -87,7 +87,7 @@ module "bastion" {
   ssh_public_key      = var.ssh_public_key
   
   # 實例設定
-  instance_type       = "t3.micro"
+  instance_type       = "t4g.nano"
   volume_size         = 30
   monitoring          = true
   

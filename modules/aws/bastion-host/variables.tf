@@ -34,7 +34,7 @@ variable "ssh_public_key" {
 variable "instance_type" {
   description = "NAT Gateway 實例類型"
   type        = string
-  default     = "t3.nano"
+  default     = "t4g.nano"
 }
 
 variable "additional_security_group_ids" {
