@@ -48,3 +48,7 @@ output "task_role_arn" {
   value       = module.ecs_role.task_role_arn
 }
 
+output "ecs_service_sg_id" {
+  description = "ECS service security group ID"
+  value       = module.ecs_service.ecs_service_sg_id
+}
