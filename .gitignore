@@ -1,0 +1,39 @@
+# Terraform 忽略檔案
+
+# .terraform/ 目錄：存放 Terraform 下載的 providers、modules 和 plugin。
+# 這是本地執行時的暫存區，不應提交。
+.terraform/
+
+# .terraform.lock.hcl：Terraform 1.x 版本引入的 provider 鎖定檔案。
+# !!! 強烈建議將此檔案提交到 Git 以確保版本一致性 !!!
+# 如果你確定不希望提交它（極不推薦），請將其取消註解。
+# .terraform.lock.hcl
+
+# Terraform 狀態檔：
+# .tfstate 檔案是 Terraform 管理的基礎設施的狀態快照。
+# 遠端狀態 (如 S3) 是推薦的做法，本地 .tfstate 檔不應提交。
+# 遠端狀態檔通常命名為 terraform.tfstate 或 backend.tfstate 等。
+*.tfstate
+*.tfstate.*
+terraform.tfstate
+terraform.tfstate.backup
+
+# Terraform 敏感資料變數檔案：
+# 通常用於儲存敏感資訊如 API 金鑰、密碼等。
+# 這些檔案絕對不應提交到 Git。
+*.tfvars
+*.tfvars.json
+
+# Terraform CLI 暫存檔案：
+# 在執行 terraform plan 或 apply 時可能生成的檔案。
+.terraformrc
+crash.log
+
+# IDE 和作業系統生成的檔案：
+# 這些是開發環境或作業系統特有的檔案，通常不相關。
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.bak
+*~
