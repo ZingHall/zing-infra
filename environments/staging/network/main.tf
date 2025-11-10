@@ -10,18 +10,18 @@ terraform {
   }
 
   backend "s3" {
-    bucket         = "terraform.jastron-staging.com"
+    bucket         = "terraform-zing-staging"
     key            = "network.tfstate" # 你的狀態檔路徑，可自訂
     region         = "ap-northeast-1"
     encrypt        = true
     dynamodb_table = "terraform-lock-table"
-    profile        = "jastron-staging"
+    profile        = "zing-staging"
   }
 }
 
 provider "aws" {
   region  = "ap-northeast-1"
-  profile = "jastron-staging"
+  profile = "zing-staging"
 
   default_tags {
     tags = {
