@@ -21,10 +21,16 @@ variable "ssm_parameter_arns" {
   default     = ["*"]
 }
 
-variable "log_group_arn" {
-  description = "CloudWatch log group ARN for logging permissions"
+variable "log_group_name" {
+  description = "(Optional) CloudWatch Log Group name to create. If provided, the module will create the log group and use it for permissions."
   type        = string
   default     = ""
+}
+
+variable "log_retention_in_days" {
+  description = "Retention in days for the created CloudWatch Log Group (only used when log_group_name is set)."
+  type        = number
+  default     = 30
 }
 
 variable "execution_role_policies" {

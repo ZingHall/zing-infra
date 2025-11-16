@@ -40,7 +40,7 @@ module "ecs_role" {
   enable_secrets_access   = false
   secrets_arns            = []
   ssm_parameter_arns      = []
-  log_group_arn           = ""
+  log_group_name          = "/ecs/zing-api"
   execution_role_policies = {}
   task_role_policies      = {}
 }
@@ -97,6 +97,7 @@ module "ecs_service" {
   container_port        = 3000
   task_cpu              = 256
   task_memory           = 512
+  log_group_name        = module.ecs_role.log_group_name
 }
 
 # Route53 Record

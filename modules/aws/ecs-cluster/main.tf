@@ -7,6 +7,14 @@ resource "aws_ecs_cluster" "this" {
     value = var.container_insights_enabled ? "enabled" : "disabled"
   }
 
+  dynamic "service_connect_defaults" {
+    for_each = var.service_connect_namespace != "" ? [1] : []
+
+    content {
+      namespace = var.service_connect_namespace
+    }
+  }
+
   tags = var.tags
 }
 

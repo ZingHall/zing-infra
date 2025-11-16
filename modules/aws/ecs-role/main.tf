@@ -84,6 +84,17 @@ resource "aws_iam_role" "task" {
 }
 
 # Basic task role policy (CloudWatch Logs)
+locals {
+  effective_log_group_arn = var.log_group_name != "" && length(aws_cloudwatch_log_group.this) > 0 ? aws_cloudwatch_log_group.this[0].arn : ""
+}
+
+resource "aws_cloudwatch_log_group" "this" {
+  count             = var.log_group_name != "" ? 1 : 0
+  name              = var.log_group_name
+  retention_in_days = var.log_retention_in_days
+  tags              = var.tags
+}
+
 resource "aws_iam_role_policy" "task_logs" {
   name = "${var.name}-logs-policy"
   role = aws_iam_role.task.id
@@ -97,10 +108,11 @@ resource "aws_iam_role_policy" "task_logs" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = var.log_group_arn != "" ? "${var.log_group_arn}:*" : "*"
+        Resource = local.effective_log_group_arn != "" ? "${local.effective_log_group_arn}:*" : "*"
       }
     ]
   })
+  depends_on = [aws_cloudwatch_log_group.this]
 }
 
 # Custom task role policies

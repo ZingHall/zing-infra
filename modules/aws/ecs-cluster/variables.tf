@@ -25,6 +25,12 @@ variable "default_capacity_provider_strategy" {
   default = []
 }
 
+variable "service_connect_namespace" {
+  description = "Service Connect namespace ARN for the cluster"
+  type        = string
+  default     = ""
+}
+
 variable "tags" {
   description = "Tags to apply to all resources"
   type        = map(string)

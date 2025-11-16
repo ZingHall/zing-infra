@@ -11,7 +11,7 @@ variable "tags" {
 
 # Required External Resources
 variable "cluster_id" {
-  description = "ECS Cluster ID（必填）"
+  description = "ECS Cluster ID (ARN). Required external cluster; module no longer creates one."
   type        = string
 }
 
@@ -82,4 +82,56 @@ variable "task_memory" {
   description = "ECS Task Memory 單位 (MB)"
   type        = number
   default     = 512
+}
+
+# Service Connect 配置
+variable "service_connect_namespace" {
+  description = "Service Connect namespace ARN"
+  type        = string
+  default     = ""
+}
+
+variable "enable_service_connect" {
+  description = "是否啟用 Service Connect"
+  type        = bool
+  default     = false
+}
+
+# 部署配置
+variable "deployment_maximum_percent" {
+  description = "部署時最大任務百分比"
+  type        = number
+  default     = 200
+}
+
+variable "deployment_minimum_healthy_percent" {
+  description = "部署時最小健康任務百分比"
+  type        = number
+  default     = 100
+}
+
+# 健康檢查配置
+variable "health_check_grace_period_seconds" {
+  description = "健康檢查寬限期（秒），0 表示不使用"
+  type        = number
+  default     = 0
+}
+
+# ECS 標籤管理
+variable "enable_ecs_managed_tags" {
+  description = "是否啟用 ECS 管理的標籤"
+  type        = bool
+  default     = false
+}
+
+variable "propagate_tags" {
+  description = "標籤傳播方式：SERVICE, TASK_DEFINITION, 或 NONE"
+  type        = string
+  default     = "NONE"
+}
+
+variable "log_group_name" {
+  description = "(Optional) CloudWatch Log Group name used for container awslogs driver. If empty, logging configuration is omitted."
+  type        = string
+  default     = ""
 }

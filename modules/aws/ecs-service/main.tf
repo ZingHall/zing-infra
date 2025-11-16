@@ -1,6 +1,35 @@
+data "aws_region" "current" {}
+
+
+locals {
+  base_container = {
+    name      = var.container_name
+    essential = true
+    image     = "${var.name}:latest"
+    portMappings = [
+      {
+        containerPort = var.container_port
+        hostPort      = var.container_port
+        protocol      = "tcp"
+      }
+    ]
+  }
+  container_with_logs = merge(local.base_container, var.log_group_name != "" ? {
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = var.log_group_name
+        awslogs-region        = data.aws_region.current.name
+        awslogs-stream-prefix = var.container_name
+      }
+    }
+  } : {})
+}
+
+
 resource "aws_security_group" "ecs" {
-  name        = "${var.name}-ecs-sg"
-  description = "ECS Service security group for ${var.name}"
+  name        = "${var.name}-sg"
+  description = "ECS Service security group"
   vpc_id      = var.vpc_id
 
   ingress {
@@ -16,7 +45,6 @@ resource "aws_security_group" "ecs" {
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
-    description = "Allow all outbound"
   }
 
   tags = var.tags
@@ -30,19 +58,7 @@ resource "aws_ecs_task_definition" "this" {
   memory                   = var.task_memory
   execution_role_arn       = var.execution_role_arn
   task_role_arn            = var.task_role_arn
-  container_definitions = jsonencode([
-    {
-      name      = var.container_name
-      essential = true,
-      image     = "${var.name}:latest",
-      portMappings = [
-        {
-          containerPort = var.container_port,
-          protocol      = "tcp"
-        }
-      ],
-    }
-  ])
+  container_definitions    = jsonencode([local.container_with_logs])
 }
 
 resource "aws_ecs_service" "this" {
@@ -64,13 +80,33 @@ resource "aws_ecs_service" "this" {
     assign_public_ip = var.assign_public_ip
   }
 
+  # 部署配置（顶级属性，不是 block）
+  deployment_maximum_percent         = var.deployment_maximum_percent
+  deployment_minimum_healthy_percent = var.deployment_minimum_healthy_percent
+
+  # Service Connect 配置
+  dynamic "service_connect_configuration" {
+    for_each = var.enable_service_connect ? [1] : []
+
+    content {
+      enabled   = true
+      namespace = var.service_connect_namespace
+    }
+  }
+
+  # 健康檢查寬限期
+  health_check_grace_period_seconds = var.health_check_grace_period_seconds > 0 ? var.health_check_grace_period_seconds : null
+
+  # ECS 管理的標籤
+  enable_ecs_managed_tags = var.enable_ecs_managed_tags
+  propagate_tags          = var.propagate_tags != "NONE" ? var.propagate_tags : null
+
   depends_on = [aws_ecs_task_definition.this]
   tags       = var.tags
 
   lifecycle {
     ignore_changes = [
-      task_definition,
-      desired_count
+      task_definition
     ]
   }
 }

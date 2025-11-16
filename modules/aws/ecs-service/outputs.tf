@@ -1,3 +1,8 @@
+output "ecs_cluster_id" {
+  description = "ECS cluster ID (ARN) passed into module"
+  value       = var.cluster_id
+}
+
 output "ecs_service_id" {
   description = "ECS service ID"
   value       = aws_ecs_service.this.id

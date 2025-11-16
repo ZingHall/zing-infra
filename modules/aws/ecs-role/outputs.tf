@@ -28,3 +28,13 @@ output "task_role_id" {
   value       = aws_iam_role.task.id
 }
 
+output "log_group_name" {
+  description = "Name of the created CloudWatch Log Group (empty if not created)"
+  value       = var.log_group_name
+}
+
+output "log_group_arn" {
+  description = "ARN of the effective CloudWatch Log Group (created or provided). Empty if none."
+  value       = local.effective_log_group_arn
+}
+
