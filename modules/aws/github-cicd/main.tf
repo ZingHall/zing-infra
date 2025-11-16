@@ -97,9 +97,14 @@ resource "aws_iam_role_policy" "pass_role_policy" {
         Effect = "Allow"
         Action = ["iam:PassRole"]
         Resource = [
-          "arn:aws:iam::*:role/*ecs-execution-role",
-          "arn:aws:iam::*:role/*ecs-task-role"
+          "arn:aws:iam::*:role/*-execution-role",
+          "arn:aws:iam::*:role/*-task-role",
         ]
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "ecs-tasks.amazonaws.com"
+          }
+        }
       }
     ]
   })
