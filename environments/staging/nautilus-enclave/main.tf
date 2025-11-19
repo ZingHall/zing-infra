@@ -112,7 +112,7 @@ module "nautilus_enclave" {
 
   s3_bucket_name = aws_s3_bucket.enclave_artifacts.bucket
   s3_bucket_arn  = aws_s3_bucket.enclave_artifacts.arn
-  eif_version    = "534a3c7"
+  eif_version    = "8e87460"
   eif_path       = "eif/staging"
 
   instance_type    = "m5.xlarge"
@@ -125,9 +125,8 @@ module "nautilus_enclave" {
   enclave_port      = 3000
   enclave_init_port = 3001
 
-  allowed_cidr_blocks = [
-    data.terraform_remote_state.network.outputs.vpc_cidr_block
-  ]
+  # Allow traffic from ALB security group (will be added via security_group_rule)
+  allowed_cidr_blocks = []
 
   secrets_arns = []
 
@@ -142,15 +141,99 @@ module "nautilus_enclave" {
 
   enable_public_ip = false
 
-  create_dns_record = false
-  route53_zone_id   = ""
-  dns_name          = "enclave.staging.zing.you"
-  dns_ttl           = 300
-
   tags = {
     Environment = "staging"
     Application = "nautilus-watermark"
     ManagedBy   = "terraform"
+  }
+}
+
+# ACM Certificate for Enclave
+locals {
+  enclave_domain = "enclave.staging.zing.you"
+}
+
+module "acm_cert" {
+  source = "../../../modules/aws/acm-cert"
+
+  description      = "ACM certificate for ${local.enclave_domain}"
+  domain_name      = local.enclave_domain
+  hosted_zone_name = data.terraform_remote_state.network.outputs.hosted_zone_name
+}
+
+# HTTPS ALB for Enclave
+module "alb" {
+  source = "../../../modules/aws/https-alb"
+
+  name            = "nautilus-encl"
+  vpc_id          = data.terraform_remote_state.network.outputs.vpc_id
+  subnet_ids      = data.terraform_remote_state.network.outputs.public_subnet_ids
+  certificate_arn = module.acm_cert.cert_arn
+
+  services = [{
+    name                             = "enclave"
+    port                             = 3000
+    target_type                      = "instance" # Required for EC2 Auto Scaling Group
+    host_headers                     = [local.enclave_domain]
+    priority                         = 100
+    health_check_path                = "/health_check"
+    health_check_matcher             = "200"
+    health_check_interval            = 30
+    health_check_timeout             = 5
+    health_check_healthy_threshold   = 2
+    health_check_unhealthy_threshold = 3
+    deregistration_delay             = 30
+    stickiness_enabled               = false
+    stickiness_duration              = 86400
+  }]
+
+  internal                    = false
+  ingress_cidr_blocks         = ["0.0.0.0/0"]
+  http_redirect               = true
+  ssl_policy                  = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  additional_certificate_arns = []
+  access_log_bucket           = ""
+  access_log_prefix           = ""
+}
+
+# Register Auto Scaling Group with ALB Target Group
+resource "aws_autoscaling_attachment" "enclave" {
+  autoscaling_group_name = module.nautilus_enclave.autoscaling_group_id
+  lb_target_group_arn    = module.alb.target_group_arns["enclave"]
+}
+
+# Update Enclave Security Group to allow traffic from ALB
+resource "aws_security_group_rule" "enclave_from_alb" {
+  type                     = "ingress"
+  from_port                = 3000
+  to_port                  = 3000
+  protocol                 = "tcp"
+  source_security_group_id = module.alb.alb_security_group_id
+  security_group_id        = module.nautilus_enclave.security_group_id
+  description              = "Allow traffic from ALB to Enclave"
+}
+
+# Allow SSH access from VPC for debugging
+resource "aws_security_group_rule" "enclave_ssh" {
+  type              = "ingress"
+  from_port         = 22
+  to_port           = 22
+  protocol          = "tcp"
+  cidr_blocks       = [data.terraform_remote_state.network.outputs.vpc_cidr_block]
+  security_group_id = module.nautilus_enclave.security_group_id
+  description       = "Allow SSH access from VPC"
+}
+
+# Route53 Record pointing to ALB
+resource "aws_route53_record" "enclave" {
+  zone_id = data.terraform_remote_state.network.outputs.hosted_zone_id
+  name    = local.enclave_domain
+  type    = "A"
+
+  alias {
+    name                   = module.alb.alb_dns_name
+    zone_id                = module.alb.alb_zone_id
+    evaluate_target_health = true
   }
 }
 

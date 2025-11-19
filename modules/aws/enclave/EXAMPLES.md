@@ -266,7 +266,7 @@ module "nautilus_enclave" {
 }
 ```
 
-## Example 5: With Route53 DNS
+## Example 5: With ALB and Route53 DNS
 
 ```hcl
 # Get hosted zone
@@ -274,6 +274,35 @@ data "aws_route53_zone" "main" {
   name = "zing.you"
 }
 
+# ACM Certificate
+module "acm_cert" {
+  source = "../../../modules/aws/acm-cert"
+
+  description      = "ACM certificate for enclave.zing.you"
+  domain_name      = "enclave.zing.you"
+  hosted_zone_name = data.aws_route53_zone.main.name
+}
+
+# ALB
+module "alb" {
+  source = "../../../modules/aws/https-alb"
+
+  name            = "nautilus-enclave"
+  vpc_id          = var.vpc_id
+  subnet_ids      = var.public_subnet_ids
+  certificate_arn = module.acm_cert.cert_arn
+
+  services = [{
+    name                             = "nautilus-enclave"
+    port                             = 3000
+    host_headers                     = ["enclave.zing.you"]
+    priority                         = 100
+    health_check_path                = "/health_check"
+    health_check_matcher             = "200"
+  }]
+}
+
+# Enclave
 module "nautilus_enclave" {
   source = "../../../modules/aws/enclave"
 
@@ -285,19 +314,29 @@ module "nautilus_enclave" {
   s3_bucket_arn  = "arn:aws:s3:::zing-enclave-artifacts"
   eif_version    = var.enclave_version
 
-  # DNS configuration
-  create_dns_record = true
-  route53_zone_id   = data.aws_route53_zone.main.zone_id
-  dns_name          = "enclave.zing.you"
-  dns_ttl           = 300
-
   tags = {
     Environment = "production"
   }
 }
 
-# Note: DNS record will need to be updated manually with actual IPs
-# or via external script that queries the ASG instances
+# Register ASG with Target Group
+resource "aws_autoscaling_attachment" "enclave" {
+  autoscaling_group_name = module.nautilus_enclave.autoscaling_group_id
+  lb_target_group_arn    = module.alb.target_group_arns["nautilus-enclave"]
+}
+
+# Route53 Record pointing to ALB
+resource "aws_route53_record" "enclave" {
+  zone_id = data.aws_route53_zone.main.zone_id
+  name    = "enclave.zing.you"
+  type    = "A"
+
+  alias {
+    name                   = module.alb.alb_dns_name
+    zone_id                = module.alb.alb_zone_id
+    evaluate_target_health = true
+  }
+}
 ```
 
 ## Example 6: Cost-Optimized with Spot Instances

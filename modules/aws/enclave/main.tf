@@ -25,21 +25,8 @@ resource "aws_security_group" "enclave" {
   description = "Security group for Nitro Enclave EC2 instances"
   vpc_id      = var.vpc_id
 
-  ingress {
-    from_port   = var.enclave_port
-    to_port     = var.enclave_port
-    protocol    = "tcp"
-    cidr_blocks = var.allowed_cidr_blocks
-    description = "Enclave HTTP endpoint"
-  }
-
-  ingress {
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = var.allowed_cidr_blocks
-    description = "SSH access"
-  }
+  # Note: Ingress rules are managed separately using aws_security_group_rule resources
+  # in the environment configuration for better flexibility (e.g., ALB integration)
 
   egress {
     from_port   = 0
@@ -49,12 +36,10 @@ resource "aws_security_group" "enclave" {
     description = "Allow all outbound traffic"
   }
 
-  tags = merge(
-    var.tags,
-    {
-      Name = "${var.name}-enclave-sg"
-    }
-  )
+  # Tags: Name tag only (provider default_tags will be automatically applied)
+  tags = {
+    Name = "${var.name}-enclave-sg"
+  }
 }
 
 # IAM Role for EC2 instances
@@ -74,12 +59,11 @@ resource "aws_iam_role" "enclave" {
     ]
   })
 
-  tags = merge(
-    var.tags,
-    {
-      Name = "${var.name}-enclave-role"
-    }
-  )
+  # Note: Tags are merged with provider default_tags
+  # Ensure no duplicate keys (AWS tag keys are case-insensitive)
+  tags = {
+    Name = "${var.name}-enclave-role"
+  }
 }
 
 # IAM Policy for S3 access
@@ -153,12 +137,10 @@ resource "aws_iam_instance_profile" "enclave" {
   name = "${var.name}-enclave-profile"
   role = aws_iam_role.enclave.name
 
-  tags = merge(
-    var.tags,
-    {
-      Name = "${var.name}-enclave-profile"
-    }
-  )
+  # Tags: Name tag only (provider default_tags will be automatically applied)
+  tags = {
+    Name = "${var.name}-enclave-profile"
+  }
 }
 
 # Launch Template
@@ -210,30 +192,24 @@ resource "aws_launch_template" "enclave" {
 
   tag_specifications {
     resource_type = "instance"
-    tags = merge(
-      var.tags,
-      {
-        Name = var.name
-      }
-    )
+    # Tags: Name tag only (provider default_tags will be automatically applied)
+    tags = {
+      Name = var.name
+    }
   }
 
   tag_specifications {
     resource_type = "volume"
-    tags = merge(
-      var.tags,
-      {
-        Name = "${var.name}-volume"
-      }
-    )
+    # Tags: Name tag only (provider default_tags will be automatically applied)
+    tags = {
+      Name = "${var.name}-volume"
+    }
   }
 
-  tags = merge(
-    var.tags,
-    {
-      Name = "${var.name}-launch-template"
-    }
-  )
+  # Tags: Name tag only (provider default_tags will be automatically applied)
+  tags = {
+    Name = "${var.name}-launch-template"
+  }
 
   lifecycle {
     create_before_destroy = true
@@ -261,14 +237,8 @@ resource "aws_autoscaling_group" "enclave" {
     propagate_at_launch = true
   }
 
-  dynamic "tag" {
-    for_each = var.tags
-    content {
-      key                 = tag.key
-      value               = tag.value
-      propagate_at_launch = true
-    }
-  }
+  # Note: Provider default_tags will be automatically applied
+  # No need to add var.tags here to avoid duplicate tag keys
 
   lifecycle {
     create_before_destroy = true
@@ -290,46 +260,19 @@ resource "aws_autoscaling_policy" "cpu_scaling" {
   }
 }
 
-resource "aws_autoscaling_policy" "memory_scaling" {
-  count                  = var.enable_auto_scaling ? 1 : 0
-  name                   = "${var.name}-memory-scaling"
-  autoscaling_group_name = aws_autoscaling_group.enclave.name
-  policy_type            = "TargetTrackingScaling"
-
-  target_tracking_configuration {
-    predefined_metric_specification {
-      predefined_metric_type = "ASGAverageMemoryUtilization"
-    }
-    target_value = var.target_memory_utilization
-  }
-}
+# Note: AWS Auto Scaling does not support memory-based scaling
+# Only CPU, Network, and ALB request count metrics are supported
+# Memory scaling would require custom CloudWatch metrics and alarms
 
 # CloudWatch Log Group
 resource "aws_cloudwatch_log_group" "enclave" {
   name              = "/aws/ec2/${var.name}"
   retention_in_days = 7
 
-  tags = merge(
-    var.tags,
-    {
-      Name = "${var.name}-logs"
-    }
-  )
+  # Tags: Name tag only (provider default_tags will be automatically applied)
+  tags = {
+    Name = "${var.name}-logs"
+  }
 }
 
-# Route53 DNS Record (optional)
-# Note: aws_route53_record does not support tags
-# Note: This will need to be updated manually or via external script
-# since we can't easily get the public IP from ASG in Terraform
-resource "aws_route53_record" "enclave" {
-  count   = var.create_dns_record && var.route53_zone_id != "" ? 1 : 0
-  zone_id = var.route53_zone_id
-  name    = var.dns_name
-  type    = "A"
-  ttl     = var.dns_ttl
-
-  # This is a placeholder - needs to be updated with actual IP addresses
-  # Consider using an external script or Lambda function to update this
-  records = [aws_autoscaling_group.enclave.id]
-}
 

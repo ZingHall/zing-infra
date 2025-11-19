@@ -161,27 +161,3 @@ variable "tags" {
   default     = {}
 }
 
-variable "create_dns_record" {
-  description = "Whether to create a Route53 DNS record"
-  type        = bool
-  default     = false
-}
-
-variable "route53_zone_id" {
-  description = "Route53 hosted zone ID for DNS record"
-  type        = string
-  default     = ""
-}
-
-variable "dns_name" {
-  description = "DNS name for the enclave service"
-  type        = string
-  default     = ""
-}
-
-variable "dns_ttl" {
-  description = "TTL for the DNS record"
-  type        = number
-  default     = 300
-}
-

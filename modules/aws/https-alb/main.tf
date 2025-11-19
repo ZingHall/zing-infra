@@ -101,11 +101,11 @@ resource "aws_alb_listener_certificate" "additional" {
 resource "aws_alb_target_group" "services" {
   for_each = { for svc in var.services : svc.name => svc }
 
-  name        = "${var.name}-${each.value.name}-tg"
+  name_prefix = substr("${var.name}-${each.value.name}", 0, 6)
   port        = each.value.port
   protocol    = "HTTP"
   vpc_id      = var.vpc_id
-  target_type = "ip" # For ECS Fargate
+  target_type = each.value.target_type # "ip" for ECS Fargate, "instance" for EC2
 
   health_check {
     enabled             = true

@@ -73,3 +73,23 @@ output "eif_version" {
   value       = var.eif_version
 }
 
+output "alb_dns_name" {
+  description = "ALB DNS name"
+  value       = module.alb.alb_dns_name
+}
+
+output "alb_zone_id" {
+  description = "ALB Zone ID"
+  value       = module.alb.alb_zone_id
+}
+
+output "enclave_endpoint" {
+  description = "HTTPS endpoint for the enclave service"
+  value       = "https://${local.enclave_domain}"
+}
+
+output "target_group_arn" {
+  description = "Target Group ARN for the enclave service"
+  value       = module.alb.target_group_arns["enclave"]
+}
+

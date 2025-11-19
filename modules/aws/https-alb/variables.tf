@@ -21,10 +21,11 @@ variable "certificate_arn" {
 variable "services" {
   description = "List of services to create target groups and routing rules for"
   type = list(object({
-    name                             = string       # Service name
-    port                             = number       # Container port
-    host_headers                     = list(string) # Domain names for routing
-    priority                         = number       # Listener rule priority (lower = higher priority)
+    name                             = string                 # Service name
+    port                             = number                 # Container port
+    host_headers                     = list(string)           # Domain names for routing
+    priority                         = number                 # Listener rule priority (lower = higher priority)
+    target_type                      = optional(string, "ip") # Target type: "ip" for ECS Fargate, "instance" for EC2
     health_check_path                = optional(string, "/health")
     health_check_matcher             = optional(string, "200-399")
     health_check_interval            = optional(number, 30)
