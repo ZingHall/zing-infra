@@ -112,7 +112,7 @@ module "nautilus_enclave" {
 
   s3_bucket_name = aws_s3_bucket.enclave_artifacts.bucket
   s3_bucket_arn  = aws_s3_bucket.enclave_artifacts.arn
-  eif_version    = var.eif_version
+  eif_version    = "534a3c7"
   eif_path       = "eif/staging"
 
   instance_type    = "m5.xlarge"

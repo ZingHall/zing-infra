@@ -318,6 +318,9 @@ resource "aws_cloudwatch_log_group" "enclave" {
 }
 
 # Route53 DNS Record (optional)
+# Note: aws_route53_record does not support tags
+# Note: This will need to be updated manually or via external script
+# since we can't easily get the public IP from ASG in Terraform
 resource "aws_route53_record" "enclave" {
   count   = var.create_dns_record && var.route53_zone_id != "" ? 1 : 0
   zone_id = var.route53_zone_id
@@ -325,15 +328,8 @@ resource "aws_route53_record" "enclave" {
   type    = "A"
   ttl     = var.dns_ttl
 
-  # Note: This will need to be updated manually or via external script
-  # since we can't easily get the public IP from ASG in Terraform
+  # This is a placeholder - needs to be updated with actual IP addresses
+  # Consider using an external script or Lambda function to update this
   records = [aws_autoscaling_group.enclave.id]
-
-  tags = merge(
-    var.tags,
-    {
-      Name = "${var.name}-dns"
-    }
-  )
 }
 

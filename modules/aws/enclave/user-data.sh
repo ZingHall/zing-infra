@@ -71,7 +71,7 @@ fi
 echo "Using Enclave ID: \$ENCLAVE_ID, CID: \$ENCLAVE_CID"
 
 # Kill any existing socat processes
-for port in ${ENCLAVE_PORT} ${ENCLAVE_INIT_PORT}; do
+for port in ${enclave_port} ${enclave_init_port}; do
   PIDS=\$(sudo lsof -t -i :\$port 2>/dev/null || true)
   if [ -n "\$PIDS" ]; then
     echo "Killing processes on port \$port: \$PIDS"
@@ -92,11 +92,11 @@ for i in {1..5}; do
 done
 
 # Start socat forwarders
-echo "Exposing enclave port ${ENCLAVE_PORT} to host..."
-socat TCP4-LISTEN:${ENCLAVE_PORT},reuseaddr,fork VSOCK-CONNECT:\$ENCLAVE_CID:${ENCLAVE_PORT} &
+echo "Exposing enclave port ${enclave_port} to host..."
+socat TCP4-LISTEN:${enclave_port},reuseaddr,fork VSOCK-CONNECT:\$ENCLAVE_CID:${enclave_port} &
 
-echo "Exposing enclave port ${ENCLAVE_INIT_PORT} to localhost for init endpoints..."
-socat TCP4-LISTEN:${ENCLAVE_INIT_PORT},bind=127.0.0.1,reuseaddr,fork VSOCK-CONNECT:\$ENCLAVE_CID:${ENCLAVE_INIT_PORT} &
+echo "Exposing enclave port ${enclave_init_port} to localhost for init endpoints..."
+socat TCP4-LISTEN:${enclave_init_port},bind=127.0.0.1,reuseaddr,fork VSOCK-CONNECT:\$ENCLAVE_CID:${enclave_init_port} &
 
 echo "Enclave ports exposed successfully"
 EXPOSE_SCRIPT
@@ -105,7 +105,7 @@ fi
 
 # Download EIF file from S3
 echo "Downloading EIF file from S3..."
-EIF_S3_PATH="s3://${S3_BUCKET}/${EIF_PATH}/nitro-${EIF_VERSION}.eif"
+EIF_S3_PATH="s3://${s3_bucket}/${eif_path}/nitro-${eif_version}.eif"
 
 if aws s3 ls "$EIF_S3_PATH" 2>/dev/null; then
   echo "Found EIF file: $EIF_S3_PATH"
@@ -127,12 +127,12 @@ start_enclave() {
 
     echo "Starting Nitro Enclave..."
     echo "  CPU: $ENCLAVE_CPU"
-    echo "  Memory: ${ENCLAVE_MEMORY}MB"
+    echo "  Memory: $ENCLAVE_MEMORY MB"
     echo "  EIF: /opt/nautilus/nitro.eif"
     
     sudo nitro-cli run-enclave \
       --cpu-count "$ENCLAVE_CPU" \
-      --memory "${ENCLAVE_MEMORY}M" \
+      --memory "$ENCLAVE_MEMORY"M \
       --eif-path /opt/nautilus/nitro.eif || {
       echo "Error: Failed to start enclave"
       return 1
@@ -159,7 +159,7 @@ start_enclave() {
     sleep 5
     PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 || echo "localhost")
     
-    if curl -f "http://${PUBLIC_IP}:${ENCLAVE_PORT}/health_check" > /dev/null 2>&1; then
+    if curl -f "http://$PUBLIC_IP:$ENCLAVE_PORT/health_check" > /dev/null 2>&1; then
       echo "Health check passed!"
     else
       echo "Warning: Health check failed, but enclave is running"
