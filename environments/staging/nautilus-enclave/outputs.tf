@@ -70,7 +70,7 @@ output "enclave_init_port" {
 
 output "eif_version" {
   description = "Current EIF version deployed"
-  value       = var.eif_version
+  value       = local.eif_version
 }
 
 output "alb_dns_name" {

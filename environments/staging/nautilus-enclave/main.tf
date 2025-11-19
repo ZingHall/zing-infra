@@ -10,18 +10,20 @@ terraform {
   }
 
   backend "s3" {
+    # Note: profile cannot be set here (backend config doesn't support variables)
+    # For local development, use: terraform init -backend-config="profile=zing-staging"
+    # In CI/CD, profile is not needed (OIDC authentication)
     bucket         = "terraform-zing-staging"
     key            = "nautilus-enclave.tfstate"
     region         = "ap-northeast-1"
     encrypt        = true
     dynamodb_table = "terraform-lock-table"
-    profile        = "zing-staging"
   }
 }
 
 provider "aws" {
   region  = "ap-northeast-1"
-  profile = "zing-staging"
+  profile = var.aws_profile != "" ? var.aws_profile : null
 
   default_tags {
     tags = {
@@ -39,7 +41,7 @@ data "terraform_remote_state" "network" {
     bucket  = "terraform-zing-staging"
     key     = "network.tfstate"
     region  = "ap-northeast-1"
-    profile = "zing-staging"
+    profile = var.aws_profile != "" ? var.aws_profile : null
   }
 }
 
@@ -112,7 +114,7 @@ module "nautilus_enclave" {
 
   s3_bucket_name = aws_s3_bucket.enclave_artifacts.bucket
   s3_bucket_arn  = aws_s3_bucket.enclave_artifacts.arn
-  eif_version    = "8e87460"
+  eif_version    = var.eif_version
   eif_path       = "eif/staging"
 
   instance_type    = "m5.xlarge"

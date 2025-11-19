@@ -21,9 +21,26 @@ This configuration deploys:
 
 ### 1. Initialize Terraform
 
+**For Local Development (with AWS profile):**
 ```bash
 cd zing-infra/environments/staging/nautilus-enclave
-terraform init
+
+# Option 1: Use helper script
+./init-local.sh zing-staging
+
+# Option 2: Manual initialization with backend-config
+terraform init -backend-config="profile=zing-staging" -reconfigure
+```
+
+**For CI/CD (OIDC authentication, no profile needed):**
+```bash
+# Profile is not needed in CI/CD, GitHub Actions handles authentication
+terraform init \
+  -backend-config="bucket=terraform-zing-staging" \
+  -backend-config="key=nautilus-enclave.tfstate" \
+  -backend-config="region=ap-northeast-1" \
+  -backend-config="encrypt=true" \
+  -backend-config="dynamodb_table=terraform-lock-table"
 ```
 
 ### 2. Review Variables
