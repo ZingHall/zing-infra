@@ -121,22 +121,110 @@ resource "aws_iam_role_policy" "terraform_policy" {
       {
         Effect = "Allow"
         Action = [
-          "s3:*",
-          "dynamodb:*",
+          # S3 and DynamoDB (Terraform backend)
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:ListBucket",
+          "s3:GetBucketLocation",
+          "s3:GetBucketVersioning",
+          "s3:PutBucketVersioning",
+          "s3:GetBucketEncryption",
+          "s3:PutBucketEncryption",
+          "s3:PutBucketLifecycleConfiguration",
+          "s3:GetBucketLifecycleConfiguration",
+          "s3:PutBucketPublicAccessBlock",
+          "s3:GetBucketPublicAccessBlock",
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:DescribeTable",
+          "dynamodb:CreateTable",
+          "dynamodb:UpdateTable",
+          # EC2 and VPC
           "ec2:*",
-          "rds:*",
           "vpc:*",
+          # RDS (if needed)
+          "rds:*",
+          # Route53
+          "route53:ListHostedZones",
+          "route53:GetHostedZone",
+          "route53:ChangeResourceRecordSets",
+          "route53:ListResourceRecordSets",
+          "route53:GetChange",
+          # ACM (Certificate Manager)
+          "acm:DescribeCertificate",
+          "acm:ListCertificates",
+          "acm:RequestCertificate",
+          "acm:DeleteCertificate",
+          "acm:AddTagsToCertificate",
+          "acm:RemoveTagsFromCertificate",
+          # ELB (Application Load Balancer)
+          "elasticloadbalancing:*",
+          # CloudWatch Logs
+          "logs:CreateLogGroup",
+          "logs:DeleteLogGroup",
+          "logs:DescribeLogGroups",
+          "logs:DescribeLogStreams",
+          "logs:PutRetentionPolicy",
+          "logs:PutResourcePolicy",
+          "logs:ListTagsLogGroup",
+          "logs:TagLogGroup",
+          "logs:UntagLogGroup",
+          # IAM (limited permissions for Terraform-managed resources)
           "iam:GetRole",
+          "iam:CreateRole",
+          "iam:UpdateRole",
+          "iam:DeleteRole",
           "iam:GetRolePolicy",
+          "iam:PutRolePolicy",
+          "iam:DeleteRolePolicy",
           "iam:ListRolePolicies",
-          "iam:ListAttachedRolePolicies"
+          "iam:ListAttachedRolePolicies",
+          "iam:AttachRolePolicy",
+          "iam:DetachRolePolicy",
+          "iam:CreateInstanceProfile",
+          "iam:DeleteInstanceProfile",
+          "iam:GetInstanceProfile",
+          "iam:AddRoleToInstanceProfile",
+          "iam:RemoveRoleFromInstanceProfile",
+          "iam:ListInstanceProfilesForRole",
+          "iam:PassRole",
+          # Auto Scaling
+          "autoscaling:*",
+          # CloudWatch (metrics and alarms)
+          "cloudwatch:PutMetricAlarm",
+          "cloudwatch:DeleteAlarms",
+          "cloudwatch:DescribeAlarms",
+          "cloudwatch:GetMetricStatistics",
+          "cloudwatch:ListMetrics"
         ]
         Resource = "*"
       },
       {
         Effect = "Deny"
         Action = [
-          "iam:*",
+          # Deny dangerous IAM operations
+          "iam:CreateUser",
+          "iam:DeleteUser",
+          "iam:CreateGroup",
+          "iam:DeleteGroup",
+          "iam:CreatePolicy",
+          "iam:DeletePolicy",
+          "iam:CreatePolicyVersion",
+          "iam:DeletePolicyVersion",
+          "iam:SetDefaultPolicyVersion",
+          "iam:AttachUserPolicy",
+          "iam:DetachUserPolicy",
+          "iam:PutUserPolicy",
+          "iam:DeleteUserPolicy",
+          "iam:CreateAccessKey",
+          "iam:DeleteAccessKey",
+          "iam:UpdateAccessKey",
+          "iam:CreateLoginProfile",
+          "iam:DeleteLoginProfile",
+          "iam:UpdateLoginProfile",
+          # Deny account-level operations
           "organizations:*",
           "account:*",
           "billing:*",
