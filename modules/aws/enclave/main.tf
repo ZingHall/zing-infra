@@ -132,6 +132,12 @@ resource "aws_iam_role_policy" "cloudwatch_logs" {
   })
 }
 
+# Attach AWS managed policy for SSM (required for SSM Session Manager)
+resource "aws_iam_role_policy_attachment" "ssm_managed_instance_core" {
+  role       = aws_iam_role.enclave.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
 # IAM Instance Profile
 resource "aws_iam_instance_profile" "enclave" {
   name = "${var.name}-enclave-profile"

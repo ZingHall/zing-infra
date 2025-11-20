@@ -67,3 +67,42 @@ resource "aws_route53_record" "nat" {
   ttl     = var.dns_ttl
   records = [aws_eip.nat[0].public_ip]
 }
+
+# Get data sources for IAM role
+data "aws_region" "current" {}
+data "aws_caller_identity" "current" {}
+
+# Add SSM Session Manager permissions to bastion host IAM role
+# Use the IAM role name output from fck-nat module
+# This allows connecting from bastion to other instances via SSM
+resource "aws_iam_role_policy" "bastion_ssm_session" {
+  name = "${var.name}-ssm-session"
+  role = module.fck_nat.role_name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ssm:StartSession"
+        ]
+        Resource = [
+          "arn:aws:ec2:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:instance/*",
+          "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:document/SSM-SessionManagerRunShell"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ssm:DescribeInstanceInformation",
+          "ssm:DescribeInstanceProperties",
+          "ssm:DescribeSessions",
+          "ssm:GetConnectionStatus",
+          "ssm:TerminateSession"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}

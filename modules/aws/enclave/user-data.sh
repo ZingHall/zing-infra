@@ -63,7 +63,8 @@ retry 3 yum install -y \
   aws-cli \
   curl \
   wget \
-  git || {
+  git \
+  amazon-ssm-agent || {
   echo "⚠️  Some packages failed to install, continuing..."
 }
 
@@ -137,6 +138,13 @@ echo "Configuring udev rules..."
 echo 'KERNEL=="vsock", MODE="660", GROUP="ne"' > /etc/udev/rules.d/51-vsock.rules
 udevadm control --reload-rules
 udevadm trigger
+
+# Start and enable SSM Agent (required for SSM Session Manager)
+echo "Starting SSM Agent service..."
+systemctl start amazon-ssm-agent || {
+  echo "⚠️  SSM Agent not installed yet, will be installed with base packages"
+}
+systemctl enable amazon-ssm-agent || true
 
 # Start and enable Docker
 echo "Starting Docker service..."
