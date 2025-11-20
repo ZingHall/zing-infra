@@ -27,16 +27,67 @@ yum update -y
 
 # Install required packages
 echo "Installing required packages..."
+
+# Enable amazon-linux-extras for Nitro Enclaves
+echo "Enabling amazon-linux-extras for Nitro Enclaves..."
+amazon-linux-extras enable aws-nitro-enclaves-cli
+
+# Install base packages
 yum install -y \
   docker \
   jq \
   aws-cli \
-  nitro-enclaves-cli \
-  nitro-enclaves-cli-devel \
-  socat \
   curl \
   wget \
   git
+
+# Install build tools for compiling socat with VSOCK support
+yum groupinstall -y "Development Tools" || true
+yum install -y openssl-devel
+
+# Install Nitro Enclaves CLI (after enabling extras)
+echo "Installing Nitro Enclaves CLI..."
+yum install -y aws-nitro-enclaves-cli aws-nitro-enclaves-cli-devel
+
+# Add ec2-user to ne and docker groups
+echo "Configuring user groups..."
+usermod -aG ne ec2-user
+usermod -aG docker ec2-user
+
+# Compile socat with VSOCK support (standard socat package doesn't support VSOCK)
+echo "Compiling socat with VSOCK support..."
+cd /tmp
+if [ ! -f "socat-1.7.4.4.tar.gz" ]; then
+  wget -q http://www.dest-unreach.org/socat/download/socat-1.7.4.4.tar.gz || \
+    wget -q https://github.com/craigsdennis/socat/archive/refs/tags/v1.7.4.4.tar.gz -O socat-1.7.4.4.tar.gz || \
+    (echo "Warning: Failed to download socat source, will try to use system socat" && touch /tmp/socat-download-failed)
+fi
+
+if [ ! -f "/tmp/socat-download-failed" ]; then
+  tar -xzf socat-1.7.4.4.tar.gz
+  cd socat-1.7.4.4 || cd socat-1.7.4.4
+  ./configure --enable-vsock
+  make
+  make install
+  echo "✅ socat compiled with VSOCK support"
+  
+  # Verify installation
+  if /usr/local/bin/socat -h 2>&1 | grep -q "VSOCK"; then
+    echo "✅ Verified: socat supports VSOCK"
+  else
+    echo "⚠️  Warning: socat may not support VSOCK"
+  fi
+else
+  echo "⚠️  Warning: Using system socat (may not support VSOCK)"
+  # Fallback: install system socat
+  yum install -y socat || true
+fi
+
+# Configure udev rules for vsock access
+echo "Configuring udev rules..."
+echo 'KERNEL=="vsock", MODE="660", GROUP="ne"' > /etc/udev/rules.d/51-vsock.rules
+udevadm control --reload-rules
+udevadm trigger
 
 # Start and enable Docker
 echo "Starting Docker service..."
@@ -45,8 +96,12 @@ systemctl enable docker
 
 # Start and enable Nitro Enclaves
 echo "Starting Nitro Enclaves service..."
-systemctl start nitro-enclaves
-systemctl enable nitro-enclaves
+systemctl start nitro-enclaves-allocator
+systemctl enable nitro-enclaves-allocator
+
+# Restart allocator to ensure udev rules are applied
+echo "Restarting nitro-enclaves-allocator to apply udev rules..."
+systemctl restart nitro-enclaves-allocator
 
 # Create enclave directory
 echo "Creating enclave directory..."
@@ -60,8 +115,8 @@ if [ ! -f "/opt/nautilus/expose_enclave.sh" ]; then
 #!/bin/bash
 # Expose enclave ports to host
 
-ENCLAVE_ID=\$(sudo nitro-cli describe-enclaves | jq -r '.[0].EnclaveID // empty')
-ENCLAVE_CID=\$(sudo nitro-cli describe-enclaves | jq -r '.[0].EnclaveCID // empty')
+ENCLAVE_ID=\$(nitro-cli describe-enclaves | jq -r '.[0].EnclaveID // empty')
+ENCLAVE_CID=\$(nitro-cli describe-enclaves | jq -r '.[0].EnclaveCID // empty')
 
 if [ -z "\$ENCLAVE_ID" ]; then
   echo "Error: No enclave found"
@@ -84,19 +139,22 @@ sleep 2
 # Create empty secrets.json
 echo '{}' > /opt/nautilus/secrets.json
 
+# Use compiled socat if available, otherwise fallback to system socat
+SOCAT_CMD=\$(command -v /usr/local/bin/socat || command -v socat || echo "socat")
+
 # Retry loop for secrets.json delivery (VSOCK)
 for i in {1..5}; do
-  cat /opt/nautilus/secrets.json | socat - VSOCK-CONNECT:\$ENCLAVE_CID:7777 && break
+  cat /opt/nautilus/secrets.json | \$SOCAT_CMD - VSOCK-CONNECT:\$ENCLAVE_CID:7777 && break
   echo "Failed to connect to enclave on port 7777, retrying (\$i/5)..."
   sleep 2
 done
 
 # Start socat forwarders
 echo "Exposing enclave port ${enclave_port} to host..."
-socat TCP4-LISTEN:${enclave_port},reuseaddr,fork VSOCK-CONNECT:\$ENCLAVE_CID:${enclave_port} &
+\$SOCAT_CMD TCP4-LISTEN:${enclave_port},reuseaddr,fork VSOCK-CONNECT:\$ENCLAVE_CID:${enclave_port} &
 
 echo "Exposing enclave port ${enclave_init_port} to localhost for init endpoints..."
-socat TCP4-LISTEN:${enclave_init_port},bind=127.0.0.1,reuseaddr,fork VSOCK-CONNECT:\$ENCLAVE_CID:${enclave_init_port} &
+\$SOCAT_CMD TCP4-LISTEN:${enclave_init_port},bind=127.0.0.1,reuseaddr,fork VSOCK-CONNECT:\$ENCLAVE_CID:${enclave_init_port} &
 
 echo "Enclave ports exposed successfully"
 EXPOSE_SCRIPT
@@ -107,10 +165,31 @@ fi
 echo "Downloading EIF file from S3..."
 EIF_S3_PATH="s3://${s3_bucket}/${eif_path}/nitro-${eif_version}.eif"
 
+echo "EIF S3 path: $EIF_S3_PATH"
+
+# Download to temporary location first, then move to final location
+# This ensures we don't have a partial/corrupted file in the final location
 if aws s3 ls "$EIF_S3_PATH" 2>/dev/null; then
   echo "Found EIF file: $EIF_S3_PATH"
-  aws s3 cp "$EIF_S3_PATH" /opt/nautilus/nitro.eif
-  echo "EIF file downloaded successfully"
+  echo "Downloading to temporary location..."
+  aws s3 cp "$EIF_S3_PATH" /tmp/nitro.eif
+  
+  # Verify file size (should be large, at least 100MB)
+  FILE_SIZE=$(stat -f%z /tmp/nitro.eif 2>/dev/null || stat -c%s /tmp/nitro.eif 2>/dev/null || echo "0")
+  if [ "$FILE_SIZE" -gt 100000000 ]; then
+    echo "File downloaded successfully, size: $FILE_SIZE bytes"
+    echo "Moving to final location..."
+    sudo mkdir -p /opt/nautilus
+    sudo mv /tmp/nitro.eif /opt/nautilus/nitro.eif
+    sudo chmod 644 /opt/nautilus/nitro.eif
+    echo "EIF file downloaded and verified successfully"
+    ls -lh /opt/nautilus/nitro.eif
+  else
+    echo "Warning: Downloaded file size is suspiciously small ($FILE_SIZE bytes)"
+    echo "File may be corrupted or incomplete"
+    rm -f /tmp/nitro.eif
+    touch /opt/nautilus/.ready
+  fi
 else
   echo "Warning: EIF file not found at $EIF_S3_PATH"
   echo "Will wait for manual deployment or CI/CD pipeline"
@@ -122,7 +201,7 @@ fi
 start_enclave() {
   if [ -f "/opt/nautilus/nitro.eif" ]; then
     echo "Stopping any existing enclaves..."
-    sudo nitro-cli terminate-enclave --all || true
+    nitro-cli terminate-enclave --all || true
     sleep 5
 
     echo "Starting Nitro Enclave..."
@@ -130,7 +209,7 @@ start_enclave() {
     echo "  Memory: $ENCLAVE_MEMORY MB"
     echo "  EIF: /opt/nautilus/nitro.eif"
     
-    sudo nitro-cli run-enclave \
+    nitro-cli run-enclave \
       --cpu-count "$ENCLAVE_CPU" \
       --memory "$ENCLAVE_MEMORY"M \
       --eif-path /opt/nautilus/nitro.eif || {
@@ -142,7 +221,7 @@ start_enclave() {
     sleep 10
 
     # Verify enclave is running
-    ENCLAVE_ID=$(sudo nitro-cli describe-enclaves | jq -r '.[0].EnclaveID // empty')
+    ENCLAVE_ID=$(nitro-cli describe-enclaves | jq -r '.[0].EnclaveID // empty')
     if [ -z "$ENCLAVE_ID" ]; then
       echo "Error: Enclave failed to start"
       return 1

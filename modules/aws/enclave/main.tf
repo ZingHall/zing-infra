@@ -149,7 +149,21 @@ resource "aws_launch_template" "enclave" {
   image_id      = var.ami_id != null ? var.ami_id : data.aws_ami.amazon_linux[0].id
   instance_type = var.instance_type
 
-  vpc_security_group_ids = [aws_security_group.enclave.id]
+  # Use network_interfaces when public IP is enabled, otherwise use vpc_security_group_ids
+  # Note: When using network_interfaces, we must specify device_index = 0 for the primary interface
+  dynamic "network_interfaces" {
+    for_each = var.enable_public_ip ? [1] : []
+    content {
+      device_index                = 0
+      associate_public_ip_address = true
+      security_groups             = [aws_security_group.enclave.id]
+      delete_on_termination       = true
+    }
+  }
+
+  # Only use vpc_security_group_ids when public IP is disabled
+  # When using network_interfaces, vpc_security_group_ids must be empty
+  vpc_security_group_ids = var.enable_public_ip ? [] : [aws_security_group.enclave.id]
 
   iam_instance_profile {
     name = aws_iam_instance_profile.enclave.name
