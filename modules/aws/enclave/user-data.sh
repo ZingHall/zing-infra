@@ -2,8 +2,26 @@
 # User data script for Nitro Enclave EC2 instances
 # This script initializes the instance and deploys the enclave
 
-set -e
+# Don't exit on error - log and continue
+set +e
 exec > >(tee /var/log/enclave-init.log) 2>&1
+
+# Function to retry commands
+retry() {
+  local max_attempts=$1
+  shift
+  local attempt=1
+  while [ $attempt -le $max_attempts ]; do
+    if "$@"; then
+      return 0
+    fi
+    echo "Command failed (attempt $attempt/$max_attempts), retrying in 5 seconds..."
+    sleep 5
+    attempt=$((attempt + 1))
+  done
+  echo "Command failed after $max_attempts attempts"
+  return 1
+}
 
 S3_BUCKET="${s3_bucket}"
 EIF_VERSION="${eif_version}"
@@ -21,9 +39,14 @@ echo "Instance: $NAME"
 echo "Region: $REGION"
 echo "=========================================="
 
-# Update system
+# Update system (with retry and continue on failure)
 echo "Updating system packages..."
-yum update -y
+retry 3 yum update -y || {
+  echo "⚠️  yum update failed, continuing anyway..."
+  # Try to fix repository issues
+  yum clean all || true
+  yum makecache || true
+}
 
 # Install required packages
 echo "Installing required packages..."
@@ -32,14 +55,17 @@ echo "Installing required packages..."
 echo "Enabling amazon-linux-extras for Nitro Enclaves..."
 amazon-linux-extras enable aws-nitro-enclaves-cli
 
-# Install base packages
-yum install -y \
+# Install base packages (with retry)
+echo "Installing base packages..."
+retry 3 yum install -y \
   docker \
   jq \
   aws-cli \
   curl \
   wget \
-  git
+  git || {
+  echo "⚠️  Some packages failed to install, continuing..."
+}
 
 # Install build tools for compiling socat with VSOCK support
 yum groupinstall -y "Development Tools" || true
@@ -47,7 +73,10 @@ yum install -y openssl-devel
 
 # Install Nitro Enclaves CLI (after enabling extras)
 echo "Installing Nitro Enclaves CLI..."
-yum install -y aws-nitro-enclaves-cli aws-nitro-enclaves-cli-devel
+retry 3 yum install -y aws-nitro-enclaves-cli aws-nitro-enclaves-cli-devel || {
+  echo "❌ Failed to install Nitro Enclaves CLI - this is critical!"
+  exit 1
+}
 
 # Add ec2-user to ne and docker groups
 echo "Configuring user groups..."
@@ -58,17 +87,37 @@ usermod -aG docker ec2-user
 echo "Compiling socat with VSOCK support..."
 cd /tmp
 if [ ! -f "socat-1.7.4.4.tar.gz" ]; then
-  wget -q http://www.dest-unreach.org/socat/download/socat-1.7.4.4.tar.gz || \
-    wget -q https://github.com/craigsdennis/socat/archive/refs/tags/v1.7.4.4.tar.gz -O socat-1.7.4.4.tar.gz || \
-    (echo "Warning: Failed to download socat source, will try to use system socat" && touch /tmp/socat-download-failed)
+  echo "Downloading socat source..."
+  retry 3 wget -q http://www.dest-unreach.org/socat/download/socat-1.7.4.4.tar.gz || \
+    retry 3 wget -q https://github.com/craigsdennis/socat/archive/refs/tags/v1.7.4.4.tar.gz -O socat-1.7.4.4.tar.gz || \
+    (echo "⚠️  Warning: Failed to download socat source, will try to use system socat" && touch /tmp/socat-download-failed)
 fi
 
 if [ ! -f "/tmp/socat-download-failed" ]; then
   tar -xzf socat-1.7.4.4.tar.gz
   cd socat-1.7.4.4 || cd socat-1.7.4.4
-  ./configure --enable-vsock
-  make
-  make install
+  echo "Configuring socat..."
+  ./configure --enable-vsock || {
+    echo "⚠️  configure failed, trying without vsock..."
+    ./configure || {
+      echo "❌ configure failed completely"
+      touch /tmp/socat-download-failed
+    }
+  }
+  if [ ! -f "/tmp/socat-download-failed" ]; then
+    echo "Compiling socat (this may take several minutes)..."
+    make || {
+      echo "❌ make failed"
+      touch /tmp/socat-download-failed
+    }
+    if [ ! -f "/tmp/socat-download-failed" ]; then
+      echo "Installing socat..."
+      sudo make install || {
+        echo "❌ make install failed"
+        touch /tmp/socat-download-failed
+      }
+    fi
+  fi
   echo "✅ socat compiled with VSOCK support"
   
   # Verify installation
@@ -169,10 +218,13 @@ echo "EIF S3 path: $EIF_S3_PATH"
 
 # Download to temporary location first, then move to final location
 # This ensures we don't have a partial/corrupted file in the final location
-if aws s3 ls "$EIF_S3_PATH" 2>/dev/null; then
+if retry 3 aws s3 ls "$EIF_S3_PATH" 2>/dev/null; then
   echo "Found EIF file: $EIF_S3_PATH"
   echo "Downloading to temporary location..."
-  aws s3 cp "$EIF_S3_PATH" /tmp/nitro.eif
+  retry 5 aws s3 cp "$EIF_S3_PATH" /tmp/nitro.eif || {
+    echo "❌ Failed to download EIF file after retries"
+    exit 1
+  }
   
   # Verify file size (should be large, at least 100MB)
   FILE_SIZE=$(stat -f%z /tmp/nitro.eif 2>/dev/null || stat -c%s /tmp/nitro.eif 2>/dev/null || echo "0")

@@ -119,7 +119,7 @@ module "nautilus_enclave" {
 
   instance_type    = "m5.xlarge"
   min_size         = 1
-  max_size         = 2
+  max_size         = 1
   desired_capacity = 1
 
   enclave_cpu_count = 2
