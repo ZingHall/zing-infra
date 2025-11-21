@@ -43,7 +43,45 @@ terraform init \
   -backend-config="dynamodb_table=terraform-lock-table"
 ```
 
-### 2. Review Variables
+### 2. Plan Changes
+
+**Using helper script (recommended):**
+```bash
+# Plan with default profile (zing-staging)
+./plan.sh
+
+# Plan with specific profile
+./plan.sh zing-staging
+
+# Plan with specific EIF version
+./plan.sh zing-staging 2dc7685
+```
+
+**Manual command:**
+```bash
+terraform plan -var="aws_profile=zing-staging"
+```
+
+### 3. Apply Changes
+
+**Using helper script (recommended):**
+```bash
+# Apply with default profile (zing-staging)
+./apply.sh
+
+# Apply with specific profile
+./apply.sh zing-staging
+
+# Apply with specific EIF version
+./apply.sh zing-staging 2dc7685
+```
+
+**Manual command:**
+```bash
+terraform apply -var="aws_profile=zing-staging"
+```
+
+### 4. Review Variables
 
 Edit `terraform.tfvars` (if exists) or set variables:
 
