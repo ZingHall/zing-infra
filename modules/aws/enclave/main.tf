@@ -122,11 +122,18 @@ resource "aws_iam_role_policy" "cloudwatch_logs" {
         Effect = "Allow"
         Action = [
           "logs:CreateLogGroup",
+          "logs:DescribeLogGroups"
+        ]
+        Resource = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/aws/ec2/${var.name}"
+      },
+      {
+        Effect = "Allow"
+        Action = [
           "logs:CreateLogStream",
           "logs:PutLogEvents",
           "logs:DescribeLogStreams"
         ]
-        Resource = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/aws/ec2/${var.name}/*"
+        Resource = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/aws/ec2/${var.name}:*"
       }
     ]
   })
@@ -200,6 +207,7 @@ resource "aws_launch_template" "enclave" {
     enclave_init_port = var.enclave_init_port
     name              = var.name
     region            = data.aws_region.current.name
+    log_group_name    = aws_cloudwatch_log_group.enclave.name
     extra_user_data   = var.user_data_extra
   }))
 

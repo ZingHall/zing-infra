@@ -32,6 +32,7 @@ ENCLAVE_PORT="${enclave_port}"
 ENCLAVE_INIT_PORT="${enclave_init_port}"
 NAME="${name}"
 REGION="${region}"
+LOG_GROUP_NAME="${log_group_name}"
 
 echo "=========================================="
 echo "Nitro Enclave Initialization Script"
@@ -145,6 +146,71 @@ systemctl start amazon-ssm-agent || {
   echo "⚠️  SSM Agent not installed yet, will be installed with base packages"
 }
 systemctl enable amazon-ssm-agent || true
+
+# Install CloudWatch Agent
+echo "Installing CloudWatch Agent..."
+retry 3 yum install -y amazon-cloudwatch-agent || {
+  echo "⚠️  Failed to install CloudWatch Agent, continuing..."
+}
+
+# Create CloudWatch Agent configuration
+echo "Configuring CloudWatch Agent..."
+mkdir -p /opt/aws/amazon-cloudwatch-agent/etc
+cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << CW_CONFIG
+{
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          {
+            "file_path": "/var/log/enclave-init.log",
+            "log_group_name": "$LOG_GROUP_NAME",
+            "log_stream_name": "{instance_id}/enclave-init.log",
+            "retention_in_days": 7
+          },
+          {
+            "file_path": "/var/log/messages",
+            "log_group_name": "$LOG_GROUP_NAME",
+            "log_stream_name": "{instance_id}/messages",
+            "retention_in_days": 7
+          },
+          {
+            "file_path": "/var/log/secure",
+            "log_group_name": "$LOG_GROUP_NAME",
+            "log_stream_name": "{instance_id}/secure",
+            "retention_in_days": 7
+          },
+          {
+            "file_path": "/var/log/cloud-init.log",
+            "log_group_name": "$LOG_GROUP_NAME",
+            "log_stream_name": "{instance_id}/cloud-init.log",
+            "retention_in_days": 7
+          },
+          {
+            "file_path": "/var/log/cloud-init-output.log",
+            "log_group_name": "$LOG_GROUP_NAME",
+            "log_stream_name": "{instance_id}/cloud-init-output.log",
+            "retention_in_days": 7
+          }
+        ]
+      }
+    }
+  }
+}
+CW_CONFIG
+
+# Start CloudWatch Agent
+echo "Starting CloudWatch Agent..."
+/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+  -a fetch-config \
+  -m ec2 \
+  -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json \
+  -s || {
+  echo "⚠️  Failed to start CloudWatch Agent, continuing..."
+}
+
+# Enable CloudWatch Agent to start on boot
+systemctl enable amazon-cloudwatch-agent || true
 
 # Start and enable Docker
 echo "Starting Docker service..."
