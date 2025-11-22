@@ -9,11 +9,19 @@ EIF_VERSION="${2:-}"
 echo "🔧 Applying Terraform with AWS profile: $PROFILE"
 echo ""
 
-# Check if terraform is initialized
+# Check if terraform is initialized, and reinitialize if backend config might be wrong
 if [ ! -d ".terraform" ]; then
   echo "⚠️  Terraform not initialized. Running init first..."
   ./init-local.sh "$PROFILE"
   echo ""
+else
+  # Check if we can access the state file (quick validation)
+  echo "🔍 Validating Terraform backend configuration..."
+  if ! terraform state list > /dev/null 2>&1; then
+    echo "⚠️  Cannot access Terraform state. Reinitializing with profile $PROFILE..."
+    ./init-local.sh "$PROFILE"
+    echo ""
+  fi
 fi
 
 # Build terraform apply command
