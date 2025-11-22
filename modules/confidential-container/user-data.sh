@@ -13,6 +13,7 @@ ENABLE_ENCLAVE_MTLS="${enable_enclave_mtls}"
 MTLS_CERTIFICATE_SECRETS="${mtls_certificate_secrets}"
 MTLS_CERTIFICATE_PATH="${mtls_certificate_path}"
 ENCLAVE_ENDPOINTS="${enclave_endpoints}"
+LOG_GROUP_NAME="${log_group_name}"
 
 echo "=========================================="
 echo "ECS Confidential Container Initialization"
@@ -265,6 +266,99 @@ if [ "$ENABLE_ENCLAVE_MTLS" = "true" ]; then
   fi
   
   echo "mTLS configuration completed"
+fi
+
+# Install and configure CloudWatch Agent
+if [ -n "$LOG_GROUP_NAME" ]; then
+  echo ""
+  echo "=========================================="
+  echo "Installing CloudWatch Agent"
+  echo "=========================================="
+  
+  if [ "$AMI_OS" = "amazon-linux-2023" ]; then
+    echo "Installing CloudWatch Agent for Amazon Linux 2023..."
+    retry 3 dnf install -y amazon-cloudwatch-agent || {
+      echo "⚠️  Failed to install CloudWatch Agent, continuing..."
+    }
+  elif [ "$AMI_OS" = "ubuntu" ]; then
+    echo "Installing CloudWatch Agent for Ubuntu..."
+    retry 3 apt-get install -y amazon-cloudwatch-agent || {
+      echo "⚠️  Failed to install CloudWatch Agent, continuing..."
+    }
+  fi
+  
+  # Create CloudWatch Agent configuration
+  echo "Configuring CloudWatch Agent..."
+  mkdir -p /opt/aws/amazon-cloudwatch-agent/etc
+  
+  # Get instance ID
+  INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || echo "unknown")
+  
+  cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << CW_CONFIG
+{
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          {
+            "file_path": "/var/log/ecs-init.log",
+            "log_group_name": "$LOG_GROUP_NAME",
+            "log_stream_name": "$INSTANCE_ID/ecs-init.log",
+            "retention_in_days": 7
+          },
+          {
+            "file_path": "/var/log/ecs/ecs-agent.log",
+            "log_group_name": "$LOG_GROUP_NAME",
+            "log_stream_name": "$INSTANCE_ID/ecs-agent.log",
+            "retention_in_days": 7
+          },
+          {
+            "file_path": "/var/log/messages",
+            "log_group_name": "$LOG_GROUP_NAME",
+            "log_stream_name": "$INSTANCE_ID/messages",
+            "retention_in_days": 7
+          },
+          {
+            "file_path": "/var/log/secure",
+            "log_group_name": "$LOG_GROUP_NAME",
+            "log_stream_name": "$INSTANCE_ID/secure",
+            "retention_in_days": 7
+          },
+          {
+            "file_path": "/var/log/cloud-init.log",
+            "log_group_name": "$LOG_GROUP_NAME",
+            "log_stream_name": "$INSTANCE_ID/cloud-init.log",
+            "retention_in_days": 7
+          },
+          {
+            "file_path": "/var/log/cloud-init-output.log",
+            "log_group_name": "$LOG_GROUP_NAME",
+            "log_stream_name": "$INSTANCE_ID/cloud-init-output.log",
+            "retention_in_days": 7
+          }
+        ]
+      }
+    }
+  }
+}
+CW_CONFIG
+  
+  # Start CloudWatch Agent
+  echo "Starting CloudWatch Agent..."
+  /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+    -a fetch-config \
+    -m ec2 \
+    -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json \
+    -s || {
+    echo "⚠️  Failed to start CloudWatch Agent, continuing..."
+  }
+  
+  # Enable CloudWatch Agent to start on boot
+  systemctl enable amazon-cloudwatch-agent || true
+  
+  echo "✅ CloudWatch Agent configured and started"
+else
+  echo "⚠️  LOG_GROUP_NAME not set, skipping CloudWatch Agent installation"
 fi
 
 # Execute extra user data if provided

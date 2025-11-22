@@ -186,6 +186,12 @@ variable "mtls_certificate_path" {
   default     = "/etc/ecs/mtls"
 }
 
+variable "log_group_name" {
+  description = "CloudWatch Log Group name for instance logs. If empty, CloudWatch Agent will not be installed."
+  type        = string
+  default     = ""
+}
+
 variable "tags" {
   description = "Tags to apply to all resources"
   type        = map(string)

@@ -130,6 +130,12 @@ resource "aws_iam_role_policy_attachment" "ecs_instance" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role"
 }
 
+# Attach AWS managed policy for SSM (enables SSM Agent to connect)
+resource "aws_iam_role_policy_attachment" "ssm_instance" {
+  role       = aws_iam_role.ecs_instance.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
 # IAM Policy for Secrets Manager access (mTLS certificates)
 resource "aws_iam_role_policy" "secrets_access" {
   count = var.enable_enclave_mtls && length(var.mtls_certificate_secrets_arns) > 0 ? 1 : 0
@@ -201,6 +207,7 @@ resource "aws_launch_template" "ecs" {
     mtls_certificate_secrets = join(",", var.mtls_certificate_secrets_arns)
     mtls_certificate_path    = var.mtls_certificate_path
     enclave_endpoints        = join(",", var.enclave_endpoints)
+    log_group_name           = var.log_group_name
   }))
 
   # Metadata options
@@ -279,10 +286,45 @@ resource "aws_autoscaling_group" "ecs" {
 
   lifecycle {
     create_before_destroy = true
-    ignore_changes = [
-      desired_capacity
-    ]
+    # Note: desired_capacity is managed by Terraform
+    # Remove ignore_changes to allow Terraform to manage desired capacity
   }
+}
+
+# CloudWatch Log Group for instance logs
+resource "aws_cloudwatch_log_group" "instance_logs" {
+  count             = var.log_group_name != "" ? 1 : 0
+  name              = var.log_group_name
+  retention_in_days = 7
+
+  tags = merge(var.tags, {
+    Name = "${var.name}-instance-logs"
+  })
+}
+
+# IAM Policy for CloudWatch Logs access
+resource "aws_iam_role_policy" "cloudwatch_logs" {
+  count = var.log_group_name != "" ? 1 : 0
+  name  = "${var.name}-cloudwatch-logs"
+  role  = aws_iam_role.ecs_instance.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          "logs:DescribeLogStreams"
+        ]
+        Resource = [
+          "${aws_cloudwatch_log_group.instance_logs[0].arn}:*"
+        ]
+      }
+    ]
+  })
 }
 
 # ECS Cluster
