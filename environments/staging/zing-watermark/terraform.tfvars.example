@@ -1,0 +1,28 @@
+# Example terraform.tfvars file
+# Copy this to terraform.tfvars and update with your values
+
+# Task configuration
+task_cpu     = 512   # 0.5 vCPU
+task_memory  = 1024  # 1 GB
+desired_count = 1
+image_tag    = "latest"
+
+# mTLS server certificates (ECS uses these to accept TEE connections)
+# Get ARN from certs.tf output or AWS Console
+# Format: arn:aws:secretsmanager:us-east-2:ACCOUNT_ID:secret:ecs-server-mtls-cert-XXXXXX
+mtls_certificate_secrets_arns = [
+  # Uncomment and update after creating secret:
+  # "arn:aws:secretsmanager:us-east-2:ACCOUNT_ID:secret:ecs-server-mtls-cert-XXXXXX"
+]
+
+# Application secrets (optional)
+# Example: Database URL, API keys, etc.
+secrets_arns = [
+  # "arn:aws:secretsmanager:us-east-2:ACCOUNT_ID:secret:zing-watermark/database-url-XXXXXX"
+]
+
+# SSM Parameter Store ARNs (optional)
+ssm_parameter_arns = [
+  # "/zing-watermark/config"
+]
+

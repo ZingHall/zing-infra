@@ -25,32 +25,37 @@ resource "aws_iam_role_policy_attachment" "execution" {
 }
 
 # Additional policy for secrets and SSM access
+# Only create if there are resources to grant access to
 resource "aws_iam_role_policy" "execution_secrets" {
-  count = var.enable_secrets_access ? 1 : 0
+  count = var.enable_secrets_access && (length(var.secrets_arns) > 0 || length(var.ssm_parameter_arns) > 0) ? 1 : 0
 
   name = "${var.name}-secrets-access"
   role = aws_iam_role.execution.id
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "secretsmanager:GetSecretValue",
-          "kms:Decrypt"
-        ]
-        Resource = var.secrets_arns
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "ssm:GetParameters",
-          "ssm:GetParameter"
-        ]
-        Resource = var.ssm_parameter_arns
-      }
-    ]
+    Statement = concat(
+      length(var.secrets_arns) > 0 ? [
+        {
+          Effect = "Allow"
+          Action = [
+            "secretsmanager:GetSecretValue",
+            "kms:Decrypt"
+          ]
+          Resource = var.secrets_arns
+        }
+      ] : [],
+      length(var.ssm_parameter_arns) > 0 ? [
+        {
+          Effect = "Allow"
+          Action = [
+            "ssm:GetParameters",
+            "ssm:GetParameter"
+          ]
+          Resource = var.ssm_parameter_arns
+        }
+      ] : []
+    )
   })
 }
 

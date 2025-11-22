@@ -45,3 +45,34 @@ output "public_route_table_ids" {
   description = "The IDs of the public route tables."
   value       = module.vpc_subnets.public_route_table_ids
 }
+
+# us-east-2 VPC Outputs
+output "us_east_2_vpc_id" {
+  description = "The ID of the us-east-2 VPC."
+  value       = aws_vpc.us_east_2.id
+}
+
+output "us_east_2_vpc_cidr_block" {
+  description = "The CIDR block of the us-east-2 VPC."
+  value       = "10.1.0.0/16"
+}
+
+output "us_east_2_private_subnet_ids" {
+  description = "The IDs of the private subnets in us-east-2."
+  value       = aws_subnet.us_east_2_private[*].id
+}
+
+output "us_east_2_private_route_table_ids" {
+  description = "The IDs of the private route tables in us-east-2."
+  value       = aws_route_table.us_east_2_private[*].id
+}
+
+output "vpc_peering_connection_id" {
+  description = "The ID of the VPC peering connection."
+  value       = aws_vpc_peering_connection.ap_ne_1_to_us_east_2.id
+}
+
+output "us_east_2_default_security_group_id" {
+  description = "The ID of the default security group in us-east-2 VPC."
+  value       = aws_security_group.us_east_2_default.id
+}

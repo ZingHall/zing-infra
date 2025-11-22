@@ -75,6 +75,8 @@ resource "aws_security_group" "ecs" {
 }
 
 # Security group rules for Enclave mTLS connectivity
+# Note: If enclave_security_group_ids is empty, we assume cross-region and use CIDR blocks
+# This is handled by the calling module via separate security group rules
 resource "aws_security_group_rule" "enclave_ingress" {
   count = var.enable_enclave_mtls && length(var.enclave_security_group_ids) > 0 ? 1 : 0
 
@@ -191,14 +193,14 @@ resource "aws_launch_template" "ecs" {
 
   # User data for ECS agent installation
   user_data = base64encode(templatefile("${path.module}/user-data.sh", {
-    cluster_name              = aws_ecs_cluster.this.name
-    region                    = data.aws_region.current.name
-    extra_user_data           = var.user_data_extra
-    ami_os                    = var.ami_os
-    enable_enclave_mtls       = var.enable_enclave_mtls
-    mtls_certificate_secrets  = join(",", var.mtls_certificate_secrets_arns)
-    mtls_certificate_path     = var.mtls_certificate_path
-    enclave_endpoints         = join(",", var.enclave_endpoints)
+    cluster_name             = aws_ecs_cluster.this.name
+    region                   = data.aws_region.current.name
+    extra_user_data          = var.user_data_extra
+    ami_os                   = var.ami_os
+    enable_enclave_mtls      = var.enable_enclave_mtls
+    mtls_certificate_secrets = join(",", var.mtls_certificate_secrets_arns)
+    mtls_certificate_path    = var.mtls_certificate_path
+    enclave_endpoints        = join(",", var.enclave_endpoints)
   }))
 
   # Metadata options
@@ -250,7 +252,8 @@ resource "aws_autoscaling_group" "ecs" {
   health_check_grace_period = var.health_check_grace_period
 
   # Protect from scale-in during deployments
-  protect_from_scale_in = var.protect_from_scale_in
+  # If managed termination protection is enabled, we must enable scale-in protection
+  protect_from_scale_in = var.managed_termination_protection ? true : var.protect_from_scale_in
 
   # Tag instances for ECS cluster discovery
   tag {
@@ -340,7 +343,7 @@ resource "aws_autoscaling_policy" "scale_up" {
   name                   = "${var.name}-scale-up"
   autoscaling_group_name = aws_autoscaling_group.ecs.name
   adjustment_type        = "ChangeInCapacity"
-  scaling_adjustment      = 1
+  scaling_adjustment     = 1
   cooldown               = 300
 }
 

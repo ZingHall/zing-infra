@@ -174,7 +174,7 @@ if [ "$ENABLE_ENCLAVE_MTLS" = "true" ]; then
     IFS=',' read -ra SECRET_ARNS <<< "$MTLS_CERTIFICATE_SECRETS"
     SECRET_INDEX=0
     
-    for SECRET_ARN in "${SECRET_ARNS[@]}"; do
+    for SECRET_ARN in "$${SECRET_ARNS[@]}"; do
       if [ -n "$SECRET_ARN" ]; then
         echo "Downloading secret: $SECRET_ARN"
         
@@ -228,7 +228,7 @@ if [ "$ENABLE_ENCLAVE_MTLS" = "true" ]; then
             fi
           else
             # Plain text format - save with indexed filename
-            FILENAME="cert-${SECRET_INDEX}.pem"
+            FILENAME="cert-$${SECRET_INDEX}.pem"
             echo "$SECRET_VALUE" > "$MTLS_CERTIFICATE_PATH/$FILENAME"
             chmod 600 "$MTLS_CERTIFICATE_PATH/$FILENAME"
             echo "  ✓ Certificate saved as $FILENAME"
