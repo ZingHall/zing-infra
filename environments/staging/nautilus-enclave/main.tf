@@ -154,7 +154,9 @@ module "nautilus_enclave" {
   # and vsock-proxy processes will be started for each endpoint
   allowed_endpoints = [
     "fullnode.testnet.sui.io",
-    "api.weatherapi.com"
+    "api.weatherapi.com",
+    "seal-key-server-testnet-1.mystenlabs.com",
+    "seal-key-server-testnet-2.mystenlabs.com"
   ]
 
   # Deployment configuration (Instance Maintenance Policy)
