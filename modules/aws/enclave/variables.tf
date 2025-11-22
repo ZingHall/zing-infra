@@ -155,6 +155,12 @@ variable "user_data_extra" {
   default     = ""
 }
 
+variable "allowed_endpoints" {
+  description = "List of external endpoints that the enclave is allowed to access (e.g., ['fullnode.testnet.sui.io', 'api.weatherapi.com'])"
+  type        = list(string)
+  default     = []
+}
+
 variable "tags" {
   description = "Tags to apply to all resources"
   type        = map(string)

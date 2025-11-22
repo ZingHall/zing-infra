@@ -209,6 +209,7 @@ resource "aws_launch_template" "enclave" {
     region            = data.aws_region.current.name
     log_group_name    = aws_cloudwatch_log_group.enclave.name
     extra_user_data   = var.user_data_extra
+    allowed_endpoints = join(" ", var.allowed_endpoints)
   }))
 
   metadata_options {

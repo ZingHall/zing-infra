@@ -149,6 +149,14 @@ module "nautilus_enclave" {
 
   enable_public_ip = false
 
+  # Allowed endpoints for vsock-proxy configuration
+  # These endpoints will be added to /etc/nitro_enclaves/vsock-proxy.yaml
+  # and vsock-proxy processes will be started for each endpoint
+  allowed_endpoints = [
+    "fullnode.testnet.sui.io",
+    "api.weatherapi.com"
+  ]
+
   tags = {
     Environment = "staging"
     Application = "nautilus-watermark"

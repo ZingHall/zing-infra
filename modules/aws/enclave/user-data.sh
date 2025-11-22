@@ -226,6 +226,71 @@ systemctl enable nitro-enclaves-allocator
 echo "Restarting nitro-enclaves-allocator to apply udev rules..."
 systemctl restart nitro-enclaves-allocator
 
+# Configure vsock-proxy for allowed endpoints
+echo "=========================================="
+echo "Configuring vsock-proxy for allowed endpoints"
+echo "=========================================="
+
+ALLOWED_ENDPOINTS="${allowed_endpoints}"
+
+if [ -n "$ALLOWED_ENDPOINTS" ]; then
+  echo "Configuring vsock-proxy for endpoints: $ALLOWED_ENDPOINTS"
+  
+  # Ensure vsock-proxy.yaml exists and has allowlist section
+  if [ ! -f /etc/nitro_enclaves/vsock-proxy.yaml ]; then
+    echo "Creating vsock-proxy.yaml..."
+    sudo mkdir -p /etc/nitro_enclaves
+    echo "allowlist:" | sudo tee /etc/nitro_enclaves/vsock-proxy.yaml
+  fi
+  
+  # Add endpoints to vsock-proxy.yaml (if not already present)
+  for ep in $ALLOWED_ENDPOINTS; do
+    # Extract hostname (remove port if present)
+    hostname=$(echo "$ep" | sed 's/:.*$//')
+    echo "  Adding endpoint: $hostname (from $ep)"
+    
+    # Check if endpoint already exists in allowlist
+    if ! sudo grep -q "address: $hostname" /etc/nitro_enclaves/vsock-proxy.yaml; then
+      echo "    - {address: $hostname, port: 443}" | sudo tee -a /etc/nitro_enclaves/vsock-proxy.yaml
+      echo "    ✓ Added $hostname to vsock-proxy.yaml"
+    else
+      echo "    ⊙ $hostname already in vsock-proxy.yaml"
+    fi
+  done
+  
+  echo ""
+  echo "vsock-proxy.yaml configuration:"
+  sudo cat /etc/nitro_enclaves/vsock-proxy.yaml
+  
+  # Start vsock-proxy processes for each endpoint
+  echo ""
+  echo "Starting vsock-proxy processes..."
+  PORT=8101
+  for ep in $ALLOWED_ENDPOINTS; do
+    hostname=$(echo "$ep" | sed 's/:.*$//')
+    echo "  Starting vsock-proxy for $hostname on port $PORT..."
+    
+    # Kill any existing vsock-proxy on this port
+    sudo pkill -f "vsock-proxy $PORT" || true
+    sleep 1
+    
+    # Start vsock-proxy
+    sudo vsock-proxy $PORT $hostname 443 --config /etc/nitro_enclaves/vsock-proxy.yaml &
+    echo "    ✓ Started vsock-proxy $PORT -> $hostname:443"
+    
+    PORT=$((PORT+1))
+  done
+  
+  echo ""
+  echo "Verifying vsock-proxy processes..."
+  ps aux | grep vsock-proxy | grep -v grep || echo "  ⚠️  No vsock-proxy processes found"
+else
+  echo "No allowed endpoints configured, skipping vsock-proxy setup"
+fi
+
+echo "vsock-proxy configuration completed"
+echo "=========================================="
+
 # Create enclave directory
 echo "Creating enclave directory..."
 mkdir -p /opt/nautilus
