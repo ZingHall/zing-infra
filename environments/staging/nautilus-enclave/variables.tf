@@ -7,6 +7,6 @@ variable "aws_profile" {
 variable "eif_version" {
   description = "Version/tag of the EIF file to deploy (e.g., commit SHA). Update this when deploying new enclave versions."
   type        = string
-  default     = "6d43eba"
+  default     = "c39d8af"
 }
 
