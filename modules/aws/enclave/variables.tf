@@ -167,3 +167,15 @@ variable "tags" {
   default     = {}
 }
 
+variable "deployment_maximum_percent" {
+  description = "Maximum percentage of instances that can be running during instance refresh (MaxHealthyPercentage). Controls how many instances can be running above desired capacity during deployments."
+  type        = number
+  default     = 200
+}
+
+variable "deployment_minimum_healthy_percent" {
+  description = "Minimum percentage of healthy instances during instance refresh (MinHealthyPercentage). Ensures at least this percentage of instances remain healthy during deployments."
+  type        = number
+  default     = 100
+}
+

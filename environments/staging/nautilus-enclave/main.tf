@@ -157,6 +157,14 @@ module "nautilus_enclave" {
     "api.weatherapi.com"
   ]
 
+  # Deployment configuration (Instance Maintenance Policy)
+  # These parameters control instance refresh behavior:
+  # - deployment_minimum_healthy_percent: Minimum healthy instances during refresh (MinHealthyPercentage)
+  # - deployment_maximum_percent: Maximum instances allowed during refresh (MaxHealthyPercentage)
+  # With min=100, max=200: Ensures at least 100% healthy, allows up to 200% capacity during refresh
+  deployment_maximum_percent         = 200
+  deployment_minimum_healthy_percent = 100
+
   tags = {
     Environment = "staging"
     Application = "nautilus-watermark"

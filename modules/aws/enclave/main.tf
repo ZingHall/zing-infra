@@ -260,6 +260,13 @@ resource "aws_autoscaling_group" "enclave" {
     version = "$Latest"
   }
 
+  # Instance maintenance policy for instance refresh
+  # This controls how instances are replaced during deployments
+  instance_maintenance_policy {
+    min_healthy_percentage = var.deployment_minimum_healthy_percent
+    max_healthy_percentage = var.deployment_maximum_percent
+  }
+
   tag {
     key                 = "Name"
     value               = var.name
