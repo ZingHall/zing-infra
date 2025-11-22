@@ -150,14 +150,9 @@ module "nautilus_enclave" {
   enable_public_ip = false
 
   # Allowed endpoints for vsock-proxy configuration
-  # These endpoints will be added to /etc/nitro_enclaves/vsock-proxy.yaml
-  # and vsock-proxy processes will be started for each endpoint
-  allowed_endpoints = [
-    "fullnode.testnet.sui.io",
-    "api.weatherapi.com",
-    "seal-key-server-testnet-1.mystenlabs.com",
-    "seal-key-server-testnet-2.mystenlabs.com"
-  ]
+  # These endpoints are read from allowed_endpoints.yaml inside the EIF file by user-data.sh
+  # The YAML file is included in the EIF build from nautilus-watermark-service/src/nautilus-server/src/apps/zing-watermark/allowed_endpoints.yaml
+  # No need to pass allowed_endpoints here - user-data.sh extracts them from the EIF
 
   # Deployment configuration (Instance Maintenance Policy)
   # These parameters control instance refresh behavior:

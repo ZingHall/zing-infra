@@ -1,27 +1,7 @@
 #!/bin/bash
-# User data script for Nitro Enclave EC2 instances
-# This script initializes the instance and deploys the enclave
-
-# Don't exit on error - log and continue
 set +e
 exec > >(tee /var/log/enclave-init.log) 2>&1
-
-# Function to retry commands
-retry() {
-  local max_attempts=$1
-  shift
-  local attempt=1
-  while [ $attempt -le $max_attempts ]; do
-    if "$@"; then
-      return 0
-    fi
-    echo "Command failed (attempt $attempt/$max_attempts), retrying in 5 seconds..."
-    sleep 5
-    attempt=$((attempt + 1))
-  done
-  echo "Command failed after $max_attempts attempts"
-  return 1
-}
+retry(){ local m=$1;shift;a=1;while [ $a -le $m ];do "$@" && return 0;echo "Retry $a/$m...";sleep 5;a=$((a+1));done;return 1;}
 
 S3_BUCKET="${s3_bucket}"
 EIF_VERSION="${eif_version}"
@@ -34,197 +14,37 @@ NAME="${name}"
 REGION="${region}"
 LOG_GROUP_NAME="${log_group_name}"
 
-echo "Nitro Enclave Init: $NAME ($REGION)"
-
-# Update system (with retry and continue on failure)
-echo "Updating system packages..."
-retry 3 yum update -y || {
-  echo "⚠️  yum update failed, continuing anyway..."
-  # Try to fix repository issues
-  yum clean all || true
-  yum makecache || true
-}
-
-# Install required packages
-echo "Installing required packages..."
-
-# Enable amazon-linux-extras for Nitro Enclaves
-echo "Enabling amazon-linux-extras for Nitro Enclaves..."
+echo "Init: $NAME"
+retry 3 yum update -y || { yum clean all;yum makecache; }
 amazon-linux-extras enable aws-nitro-enclaves-cli
-
-# Install base packages (with retry)
-echo "Installing base packages..."
-retry 3 yum install -y \
-  docker \
-  jq \
-  aws-cli \
-  curl \
-  wget \
-  git \
-  amazon-ssm-agent || {
-  echo "⚠️  Some packages failed to install, continuing..."
-}
-
-# Install build tools for compiling socat with VSOCK support
-yum groupinstall -y "Development Tools" || true
+retry 3 yum install -y docker jq aws-cli curl wget git amazon-ssm-agent
+yum groupinstall -y "Development Tools" 2>/dev/null
 yum install -y openssl-devel
+retry 3 yum install -y aws-nitro-enclaves-cli aws-nitro-enclaves-cli-devel || exit 1
+usermod -aG ne,docker ec2-user
 
-# Install Nitro Enclaves CLI (after enabling extras)
-echo "Installing Nitro Enclaves CLI..."
-retry 3 yum install -y aws-nitro-enclaves-cli aws-nitro-enclaves-cli-devel || {
-  echo "❌ Failed to install Nitro Enclaves CLI - this is critical!"
-  exit 1
-}
-
-# Add ec2-user to ne and docker groups
-echo "Configuring user groups..."
-usermod -aG ne ec2-user
-usermod -aG docker ec2-user
-
-# Compile socat with VSOCK support (standard socat package doesn't support VSOCK)
-echo "Compiling socat with VSOCK support..."
 cd /tmp
-if [ ! -f "socat-1.7.4.4.tar.gz" ]; then
-  echo "Downloading socat source..."
-  retry 3 wget -q http://www.dest-unreach.org/socat/download/socat-1.7.4.4.tar.gz || \
-    retry 3 wget -q https://github.com/craigsdennis/socat/archive/refs/tags/v1.7.4.4.tar.gz -O socat-1.7.4.4.tar.gz || \
-    (echo "⚠️  Warning: Failed to download socat source, will try to use system socat" && touch /tmp/socat-download-failed)
-fi
+[ ! -f socat-1.7.4.4.tar.gz ] && retry 3 wget -q http://www.dest-unreach.org/socat/download/socat-1.7.4.4.tar.gz || retry 3 wget -q https://github.com/craigsdennis/socat/archive/refs/tags/v1.7.4.4.tar.gz -O socat-1.7.4.4.tar.gz || touch /tmp/socat-failed
+[ ! -f /tmp/socat-failed ] && tar -xzf socat-1.7.4.4.tar.gz && cd socat-1.7.4.4 && (./configure --enable-vsock || ./configure) && make && sudo make install || touch /tmp/socat-failed
+[ -f /tmp/socat-failed ] && yum install -y socat
 
-if [ ! -f "/tmp/socat-download-failed" ]; then
-  tar -xzf socat-1.7.4.4.tar.gz
-  cd socat-1.7.4.4 || cd socat-1.7.4.4
-  echo "Configuring socat..."
-  ./configure --enable-vsock || {
-    echo "⚠️  configure failed, trying without vsock..."
-    ./configure || {
-      echo "❌ configure failed completely"
-      touch /tmp/socat-download-failed
-    }
-  }
-  if [ ! -f "/tmp/socat-download-failed" ]; then
-    echo "Compiling socat (this may take several minutes)..."
-    make || {
-      echo "❌ make failed"
-      touch /tmp/socat-download-failed
-    }
-    if [ ! -f "/tmp/socat-download-failed" ]; then
-      echo "Installing socat..."
-      sudo make install || {
-        echo "❌ make install failed"
-        touch /tmp/socat-download-failed
-      }
-    fi
-  fi
-  echo "✅ socat compiled with VSOCK support"
-  
-  # Verify installation
-  if /usr/local/bin/socat -h 2>&1 | grep -q "VSOCK"; then
-    echo "✅ Verified: socat supports VSOCK"
-  else
-    echo "⚠️  Warning: socat may not support VSOCK"
-  fi
-else
-  echo "⚠️  Warning: Using system socat (may not support VSOCK)"
-  # Fallback: install system socat
-  yum install -y socat || true
-fi
-
-# Configure udev rules for vsock access
-echo "Configuring udev rules..."
-echo 'KERNEL=="vsock", MODE="660", GROUP="ne"' > /etc/udev/rules.d/51-vsock.rules
-udevadm control --reload-rules
-udevadm trigger
-
-# Start and enable SSM Agent (required for SSM Session Manager)
-echo "Starting SSM Agent service..."
-systemctl start amazon-ssm-agent || {
-  echo "⚠️  SSM Agent not installed yet, will be installed with base packages"
-}
-systemctl enable amazon-ssm-agent || true
-
-# Install CloudWatch Agent
-echo "Installing CloudWatch Agent..."
-retry 3 yum install -y amazon-cloudwatch-agent || {
-  echo "⚠️  Failed to install CloudWatch Agent, continuing..."
-}
-
-# Create CloudWatch Agent configuration
-echo "Configuring CloudWatch Agent..."
+echo 'KERNEL=="vsock",MODE="660",GROUP="ne"' >/etc/udev/rules.d/51-vsock.rules
+udevadm control --reload-rules && udevadm trigger
+systemctl start amazon-ssm-agent && systemctl enable amazon-ssm-agent
+retry 3 yum install -y amazon-cloudwatch-agent
 mkdir -p /opt/aws/amazon-cloudwatch-agent/etc
-cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << CW_CONFIG
-{
-  "logs": {
-    "logs_collected": {
-      "files": {
-        "collect_list": [
-          {
-            "file_path": "/var/log/enclave-init.log",
-            "log_group_name": "$LOG_GROUP_NAME",
-            "log_stream_name": "{instance_id}/enclave-init.log",
-            "retention_in_days": 7
-          },
-          {
-            "file_path": "/var/log/messages",
-            "log_group_name": "$LOG_GROUP_NAME",
-            "log_stream_name": "{instance_id}/messages",
-            "retention_in_days": 7
-          },
-          {
-            "file_path": "/var/log/secure",
-            "log_group_name": "$LOG_GROUP_NAME",
-            "log_stream_name": "{instance_id}/secure",
-            "retention_in_days": 7
-          },
-          {
-            "file_path": "/var/log/cloud-init.log",
-            "log_group_name": "$LOG_GROUP_NAME",
-            "log_stream_name": "{instance_id}/cloud-init.log",
-            "retention_in_days": 7
-          },
-          {
-            "file_path": "/var/log/cloud-init-output.log",
-            "log_group_name": "$LOG_GROUP_NAME",
-            "log_stream_name": "{instance_id}/cloud-init-output.log",
-            "retention_in_days": 7
-          }
-        ]
-      }
-    }
-  }
-}
-CW_CONFIG
-
-# Start CloudWatch Agent
-echo "Starting CloudWatch Agent..."
-/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
-  -a fetch-config \
-  -m ec2 \
-  -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json \
-  -s || {
-  echo "⚠️  Failed to start CloudWatch Agent, continuing..."
-}
-
-# Enable CloudWatch Agent to start on boot
-systemctl enable amazon-cloudwatch-agent || true
-
-# Start and enable Docker
-echo "Starting Docker service..."
-systemctl start docker
-systemctl enable docker
-
-# Start and enable Nitro Enclaves
-echo "Starting Nitro Enclaves service..."
-systemctl start nitro-enclaves-allocator
-systemctl enable nitro-enclaves-allocator
-
-# Restart allocator to ensure udev rules are applied
-echo "Restarting nitro-enclaves-allocator to apply udev rules..."
+cat >/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<CW
+{"logs":{"logs_collected":{"files":{"collect_list":[{"file_path":"/var/log/enclave-init.log","log_group_name":"$LOG_GROUP_NAME","log_stream_name":"{instance_id}/enclave-init.log","retention_in_days":7},{"file_path":"/var/log/messages","log_group_name":"$LOG_GROUP_NAME","log_stream_name":"{instance_id}/messages","retention_in_days":7},{"file_path":"/var/log/secure","log_group_name":"$LOG_GROUP_NAME","log_stream_name":"{instance_id}/secure","retention_in_days":7},{"file_path":"/var/log/cloud-init.log","log_group_name":"$LOG_GROUP_NAME","log_stream_name":"{instance_id}/cloud-init.log","retention_in_days":7},{"file_path":"/var/log/cloud-init-output.log","log_group_name":"$LOG_GROUP_NAME","log_stream_name":"{instance_id}/cloud-init-output.log","retention_in_days":7}]}}}}
+CW
+/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
+systemctl enable amazon-cloudwatch-agent
+systemctl start docker && systemctl enable docker
+systemctl start nitro-enclaves-allocator && systemctl enable nitro-enclaves-allocator
 systemctl restart nitro-enclaves-allocator
 
-# Configure vsock-proxy for allowed endpoints
-ALLOWED_ENDPOINTS="${allowed_endpoints}"
+ALLOWED_ENDPOINTS=""
 
+# Configure vsock-proxy if endpoints were extracted
 if [ -n "$ALLOWED_ENDPOINTS" ]; then
   echo "Configuring vsock-proxy..."
   sudo mkdir -p /etc/nitro_enclaves
@@ -375,6 +195,17 @@ if retry 3 aws s3 ls "$EIF_S3_PATH" 2>/dev/null; then
     sudo chmod 644 /opt/nautilus/nitro.eif
     echo "EIF file downloaded and verified successfully"
     ls -lh /opt/nautilus/nitro.eif
+    
+    # Download allowed_endpoints.yaml from S3
+    YAML_S3_PATH="s3://${s3_bucket}/${eif_path}/allowed_endpoints-${eif_version}.yaml"
+    echo "Downloading allowed_endpoints.yaml from $YAML_S3_PATH..."
+    if retry 3 aws s3 cp "$YAML_S3_PATH" /tmp/allowed_endpoints.yaml 2>/dev/null; then
+      echo "✅ Downloaded allowed_endpoints.yaml"
+      ALLOWED_ENDPOINTS=$(grep -E "^\s*-\s+" /tmp/allowed_endpoints.yaml | sed 's/^\s*-\s*//;s/#.*$//;s/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$' | tr '\n' ' ')
+      [ -n "$ALLOWED_ENDPOINTS" ] && echo "Extracted endpoints: $ALLOWED_ENDPOINTS" || echo "⚠️ No endpoints found in YAML"
+    else
+      echo "⚠️ Could not download allowed_endpoints.yaml, will skip vsock-proxy setup"
+    fi
   else
     echo "Warning: Downloaded file size is suspiciously small ($FILE_SIZE bytes)"
     echo "File may be corrupted or incomplete"
@@ -388,97 +219,32 @@ else
   touch /opt/nautilus/.ready
 fi
 
-# Function to start enclave
-start_enclave() {
-  if [ -f "/opt/nautilus/nitro.eif" ]; then
-    echo "Stopping any existing enclaves..."
-    nitro-cli terminate-enclave --all || true
-    sleep 5
-
-    echo "Starting Nitro Enclave..."
-    echo "  CPU: $ENCLAVE_CPU"
-    echo "  Memory: $ENCLAVE_MEMORY MB"
-    echo "  EIF: /opt/nautilus/nitro.eif"
-    
-    nitro-cli run-enclave \
-      --cpu-count "$ENCLAVE_CPU" \
-      --memory "$ENCLAVE_MEMORY"M \
-      --eif-path /opt/nautilus/nitro.eif || {
-      echo "Error: Failed to start enclave"
-      return 1
-    }
-
-    echo "Waiting for enclave to initialize..."
-    sleep 10
-
-    # Verify enclave is running
-    ENCLAVE_ID=$(nitro-cli describe-enclaves | jq -r '.[0].EnclaveID // empty')
-    if [ -z "$ENCLAVE_ID" ]; then
-      echo "Error: Enclave failed to start"
-      return 1
-    fi
-
-    echo "Enclave started successfully: $ENCLAVE_ID"
-
-    # Expose ports
-    echo "Exposing enclave ports..."
-    bash /opt/nautilus/expose_enclave.sh
-
-    # Health check
-    echo "Performing health check..."
-    sleep 5
-    PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 || echo "localhost")
-    
-    if curl -f "http://$PUBLIC_IP:$ENCLAVE_PORT/health_check" > /dev/null 2>&1; then
-      echo "Health check passed!"
-    else
-      echo "Warning: Health check failed, but enclave is running"
-    fi
-
-    return 0
-  else
-    echo "EIF file not found, skipping enclave startup"
-    return 1
-  fi
+start_enclave(){
+ [ -f /opt/nautilus/nitro.eif ] || return 1
+ nitro-cli terminate-enclave --all 2>/dev/null
+ sleep 5
+ nitro-cli run-enclave --cpu-count "$ENCLAVE_CPU" --memory "$ENCLAVE_MEMORY"M --eif-path /opt/nautilus/nitro.eif || return 1
+ sleep 10
+ ENCLAVE_ID=$(nitro-cli describe-enclaves|jq -r '.[0].EnclaveID//empty')
+ [ -z "$ENCLAVE_ID" ] && return 1
+ bash /opt/nautilus/expose_enclave.sh
+ sleep 5
+ PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4||echo localhost)
+ curl -f "http://$PUBLIC_IP:$ENCLAVE_PORT/health_check" >/dev/null 2>&1
 }
-
-# Start enclave if EIF is available
-if [ -f "/opt/nautilus/nitro.eif" ]; then
-  start_enclave
-fi
-
-# Create systemd service for enclave management (optional)
-cat > /etc/systemd/system/enclave-manager.service << EOF
+[ -f /opt/nautilus/nitro.eif ] && start_enclave
+cat >/etc/systemd/system/enclave-manager.service <<EOF
 [Unit]
 Description=Nitro Enclave Manager
 After=network.target
-
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/opt/nautilus/expose_enclave.sh
 Restart=on-failure
 RestartSec=10
-
 [Install]
 WantedBy=multi-user.target
 EOF
-
-# Log instance metadata
-INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
-PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 || echo "N/A")
-PRIVATE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
-
-echo "=========================================="
-echo "Initialization Complete"
-echo "Instance ID: $INSTANCE_ID"
-echo "Public IP: $PUBLIC_IP"
-echo "Private IP: $PRIVATE_IP"
-echo "Enclave Port: $ENCLAVE_PORT"
-echo "=========================================="
-
-# Execute any extra user data
 ${extra_user_data}
-
-echo "User data script completed successfully"
 
