@@ -34,11 +34,7 @@ NAME="${name}"
 REGION="${region}"
 LOG_GROUP_NAME="${log_group_name}"
 
-echo "=========================================="
-echo "Nitro Enclave Initialization Script"
-echo "Instance: $NAME"
-echo "Region: $REGION"
-echo "=========================================="
+echo "Nitro Enclave Init: $NAME ($REGION)"
 
 # Update system (with retry and continue on failure)
 echo "Updating system packages..."
@@ -227,63 +223,67 @@ echo "Restarting nitro-enclaves-allocator to apply udev rules..."
 systemctl restart nitro-enclaves-allocator
 
 # Configure vsock-proxy for allowed endpoints
-echo "=========================================="
-echo "Configuring vsock-proxy for allowed endpoints"
-echo "=========================================="
-
 ALLOWED_ENDPOINTS="${allowed_endpoints}"
 
 if [ -n "$ALLOWED_ENDPOINTS" ]; then
-  echo "Configuring vsock-proxy for endpoints: $ALLOWED_ENDPOINTS"
+  echo "Configuring vsock-proxy..."
+  sudo mkdir -p /etc/nitro_enclaves
+  [ -f /etc/nitro_enclaves/vsock-proxy.yaml ] && sudo cp /etc/nitro_enclaves/vsock-proxy.yaml /etc/nitro_enclaves/vsock-proxy.yaml.bak
   
-  # Ensure vsock-proxy.yaml exists and has allowlist section
-  if [ ! -f /etc/nitro_enclaves/vsock-proxy.yaml ]; then
-    echo "Creating vsock-proxy.yaml..."
-    sudo mkdir -p /etc/nitro_enclaves
-    echo "allowlist:" | sudo tee /etc/nitro_enclaves/vsock-proxy.yaml
+  if command -v python3 >/dev/null 2>&1; then
+    python3 << PYTHON_SCRIPT
+import re,sys
+yaml_file='/etc/nitro_enclaves/vsock-proxy.yaml'
+endpoints=set()
+try:
+    with open(yaml_file,'r') as f:
+        c=f.read()
+        l=c.split('\n')
+    for m in re.finditer(r'-\s*\{address:\s*([^,]+),\s*port:\s*(\d+)\}',c):
+        endpoints.add((m.group(1).strip(),m.group(2)))
+    i=0
+    while i<len(l):
+        if l[i].strip().startswith('- address:'):
+            h=l[i].split('address:')[1].strip()
+            if i+1<len(l) and 'port:' in l[i+1]:
+                endpoints.add((h,l[i+1].split('port:')[1].strip()))
+                i+=2
+                continue
+            endpoints.add((h,'443'))
+        i+=1
+except:pass
+for ep in """$ALLOWED_ENDPOINTS""".split():
+    if ep:endpoints.add((ep.split(':')[0].strip(),'443'))
+try:
+    with open(yaml_file,'w') as f:
+        f.write('allowlist:\n')
+        for h,p in sorted(endpoints):
+            f.write(f'  - address: {h}\n    port: {p}\n')
+except Exception as e:
+    print(f"Error: {e}",file=sys.stderr)
+    sys.exit(1)
+PYTHON_SCRIPT
+    [ $? -eq 0 ] && [ -f /etc/nitro_enclaves/vsock-proxy.yaml ] || echo "Python failed, using bash fallback"
   fi
   
-  # Add endpoints to vsock-proxy.yaml (if not already present)
-  for ep in $ALLOWED_ENDPOINTS; do
-    # Extract hostname (remove port if present)
-    hostname=$(echo "$ep" | sed 's/:.*$//')
-    echo "  Adding endpoint: $hostname (from $ep)"
-    
-    # Check if endpoint already exists in allowlist
-    if ! sudo grep -q "address: $hostname" /etc/nitro_enclaves/vsock-proxy.yaml; then
-      echo "    - {address: $hostname, port: 443}" | sudo tee -a /etc/nitro_enclaves/vsock-proxy.yaml
-      echo "    ✓ Added $hostname to vsock-proxy.yaml"
-    else
-      echo "    ⊙ $hostname already in vsock-proxy.yaml"
-    fi
-  done
-  
-  echo ""
-  echo "vsock-proxy.yaml configuration:"
-  sudo cat /etc/nitro_enclaves/vsock-proxy.yaml
-  
-  # Start vsock-proxy processes for each endpoint
-  echo ""
-  echo "Starting vsock-proxy processes..."
+  if [ ! -f /etc/nitro_enclaves/vsock-proxy.yaml ] || ! grep -q "allowlist:" /etc/nitro_enclaves/vsock-proxy.yaml 2>/dev/null; then
+    T=$(mktemp)
+    echo "allowlist:">"$T"
+    [ -f /etc/nitro_enclaves/vsock-proxy.yaml ] && sudo grep -E "^\s*-\s*\{address:" /etc/nitro_enclaves/vsock-proxy.yaml | sed -E 's/.*\{address:\s*([^,]+),\s*port:\s*([0-9]+)\}.*/\1 \2/' | sort -u | while read h p; do [ -n "$h" ] && printf "  - address: %s\n    port: %s\n" "$h" "$${p:-443}">>"$T"; done
+    for ep in $ALLOWED_ENDPOINTS; do
+      h=$(echo "$ep"|sed 's/:.*$//')
+      grep -q "address: $h" "$T" || printf "  - address: %s\n    port: 443\n" "$h">>"$T"
+    done
+    sudo mv "$T" /etc/nitro_enclaves/vsock-proxy.yaml
+  fi
   PORT=8101
   for ep in $ALLOWED_ENDPOINTS; do
-    hostname=$(echo "$ep" | sed 's/:.*$//')
-    echo "  Starting vsock-proxy for $hostname on port $PORT..."
-    
-    # Kill any existing vsock-proxy on this port
-    sudo pkill -f "vsock-proxy $PORT" || true
+    h=$(echo "$ep"|sed 's/:.*$//')
+    sudo pkill -f "vsock-proxy $PORT" 2>/dev/null || true
     sleep 1
-    
-    # Start vsock-proxy
-    sudo vsock-proxy $PORT $hostname 443 --config /etc/nitro_enclaves/vsock-proxy.yaml &
-    echo "    ✓ Started vsock-proxy $PORT -> $hostname:443"
-    
+    sudo vsock-proxy $PORT $h 443 --config /etc/nitro_enclaves/vsock-proxy.yaml &
     PORT=$((PORT+1))
   done
-  
-  echo ""
-  echo "Verifying vsock-proxy processes..."
-  ps aux | grep vsock-proxy | grep -v grep || echo "  ⚠️  No vsock-proxy processes found"
 else
   echo "No allowed endpoints configured, skipping vsock-proxy setup"
 fi
