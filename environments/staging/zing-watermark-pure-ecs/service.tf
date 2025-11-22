@@ -13,9 +13,14 @@ module "ecr" {
 module "ecs_role" {
   source = "../../../modules/aws/ecs-role"
 
-  name                    = "zing-watermark"
-  enable_secrets_access   = true
-  secrets_arns            = [var.create_mtls_secret ? aws_secretsmanager_secret.ecs_server_cert[0].arn : data.aws_secretsmanager_secret.ecs_server_cert[0].arn]
+  name                  = "zing-watermark"
+  enable_secrets_access = true
+  # Use wildcard ARN to match all secret versions (AWS adds random suffix to secret ARNs)
+  secrets_arns = [
+    var.create_mtls_secret
+    ? "${aws_secretsmanager_secret.ecs_server_cert[0].arn}*"
+    : "${data.aws_secretsmanager_secret.ecs_server_cert[0].arn}*"
+  ]
   ssm_parameter_arns      = []
   log_group_name          = "/ecs/zing-watermark"
   execution_role_policies = {}
