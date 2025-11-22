@@ -117,9 +117,15 @@ module "nautilus_enclave" {
   eif_version    = var.eif_version
   eif_path       = "eif/staging"
 
-  instance_type    = "m5.xlarge"
+  instance_type = "m5.xlarge"
+  # Note: min_size=1, max_size=2, desired_capacity=1 for cost optimization
+  # During deployment, CI/CD will temporarily scale to 2 instances for zero-downtime hotswap,
+  # then scale back to 1 instance after instance refresh completes.
+  # - min_size=1: Minimum instances (normal operation)
+  # - max_size=2: Maximum instances (allows scaling to 2 during deployment)
+  # - desired_capacity=1: Normal desired capacity (1 instance)
   min_size         = 1
-  max_size         = 1
+  max_size         = 2
   desired_capacity = 1
 
   enclave_cpu_count = 2

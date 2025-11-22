@@ -161,12 +161,17 @@ Key variables you may want to customize:
 |----------|-------------|---------|
 | `eif_version` | EIF file version (commit SHA) | `"latest"` |
 | `instance_type` | EC2 instance type | `"m5.xlarge"` |
-| `min_size` | Minimum instances | `1` |
-| `max_size` | Maximum instances | `3` |
-| `desired_capacity` | Desired instances | `1` |
+| `min_size` | Minimum instances | `1` (normal operation) |
+| `max_size` | Maximum instances | `2` (allows scaling to 2 during deployment) |
+| `desired_capacity` | Desired instances | `1` (normal operation, scales to 2 during deployment) |
 | `enclave_cpu_count` | vCPUs for enclave | `2` |
 | `enclave_memory_mb` | Memory for enclave | `512` |
 | `enable_auto_scaling` | Enable auto scaling | `true` |
+
+**Note on Instance Count:**
+- **Normal operation**: 1 instance (cost-optimized)
+- **During deployment**: CI/CD automatically scales to 2 instances for zero-downtime hotswap
+- **After deployment**: Automatically scales back to 1 instance
 
 ### Secrets Manager
 
@@ -204,6 +209,40 @@ View in AWS Console:
 - CloudWatch → Metrics → AWS/AutoScaling
 
 ## Troubleshooting
+
+### Re-running User Data Script
+
+**重要**: User data 脚本只在实例首次启动时执行一次。要重新执行 user data，需要：
+
+1. **Terminate 实例**（推荐）：
+   - Auto Scaling Group 会自动启动新实例并执行 user data
+   - 在 AWS Console: EC2 → Instances → 选择实例 → Instance state → Terminate instance
+   - 或使用 CLI:
+     ```bash
+     # 获取实例 ID
+     INSTANCE_ID=$(aws ec2 describe-instances \
+       --filters "Name=tag:Name,Values=nautilus-watermark-staging" \
+       --query 'Reservations[].Instances[?State.Name==`running`].InstanceId' \
+       --output text | head -1)
+     
+     # Terminate 实例
+     aws ec2 terminate-instances --instance-ids $INSTANCE_ID
+     ```
+
+2. **通过 Terraform 强制替换**：
+   ```bash
+   # 修改 launch template（例如更新 user data）
+   terraform apply -replace=module.nautilus_enclave.aws_launch_template.enclave
+   
+   # 然后手动替换 ASG 中的实例
+   aws autoscaling start-instance-refresh \
+     --auto-scaling-group-name nautilus-watermark-staging-asg
+   ```
+
+**注意**:
+- ❌ **Reboot** 不会重新执行 user data
+- ❌ **Stop/Start** 不会重新执行 user data
+- ✅ **Terminate** 会触发新实例启动并执行 user data
 
 ### Enclave Not Starting
 
