@@ -47,197 +47,64 @@ echo "Creating enclave directory..."
 mkdir -p /opt/nautilus
 cd /opt/nautilus
 
-# Download expose_enclave.sh script if not present
+# Download expose_enclave.sh script from S3 or create minimal version
 if [ ! -f "/opt/nautilus/expose_enclave.sh" ]; then
-  echo "Creating expose_enclave.sh script..."
-  cat > /opt/nautilus/expose_enclave.sh << EXPOSE_SCRIPT
+  echo "Downloading expose_enclave.sh from S3..."
+  EXPOSE_SCRIPT_S3="s3://${s3_bucket}/${eif_path}/expose_enclave.sh"
+  if retry 3 aws s3 cp "$EXPOSE_SCRIPT_S3" /opt/nautilus/expose_enclave.sh 2>/dev/null; then
+    echo "✅ Downloaded expose_enclave.sh from S3"
+  else
+    echo "⚠️  Failed to download from S3, creating minimal version..."
+    cat > /opt/nautilus/expose_enclave.sh << 'EXPOSE_SCRIPT'
 #!/bin/bash
-# Expose enclave ports to host
-
 ENCLAVE_ID=\$(nitro-cli describe-enclaves | jq -r '.[0].EnclaveID // empty')
 ENCLAVE_CID=\$(nitro-cli describe-enclaves | jq -r '.[0].EnclaveCID // empty')
-
-if [ -z "\$ENCLAVE_ID" ]; then
-  echo "Error: No enclave found"
-  exit 1
-fi
-
+[ -z "\$ENCLAVE_ID" ] && exit 1
 echo "Using Enclave ID: \$ENCLAVE_ID, CID: \$ENCLAVE_CID"
-
-# Kill any existing socat processes
 for port in ${enclave_port} ${enclave_init_port}; do
   PIDS=\$(sudo lsof -t -i :\$port 2>/dev/null || true)
-  if [ -n "\$PIDS" ]; then
-    echo "Killing processes on port \$port: \$PIDS"
-    sudo kill -9 \$PIDS || true
-  fi
+  [ -n "\$PIDS" ] && sudo kill -9 \$PIDS || true
 done
-
 sleep 2
-
-# Load mTLS client certificates from Secrets Manager
-# Use timeout to prevent blocking enclave startup if Secrets Manager is slow
 echo "Loading mTLS client certificates from Secrets Manager..."
-# Use secret name (without suffix) - AWS will resolve to the actual secret
-# The secret name is: nautilus-enclave-mtls-client-cert
-# AWS automatically adds a suffix, but we use the name for lookup
 MTLS_SECRET_NAME="nautilus-enclave-mtls-client-cert"
-
-# Use timeout to prevent blocking (10 seconds max)
-MTLS_SECRET_VALUE=\$(timeout 10 aws secretsmanager get-secret-value \
-    --secret-id "\$MTLS_SECRET_NAME" \
-    --region ap-northeast-1 \
-    --query SecretString \
-    --output text 2>/dev/null || echo '{}')
-
-# Validate and create secrets.json
+MTLS_SECRET_VALUE=\$(timeout 10 aws secretsmanager get-secret-value --secret-id "\$MTLS_SECRET_NAME" --region ap-northeast-1 --query SecretString --output text 2>/dev/null || echo '{}')
 if [ "\$MTLS_SECRET_VALUE" != "{}" ] && [ -n "\$MTLS_SECRET_VALUE" ] && echo "\$MTLS_SECRET_VALUE" | jq empty 2>/dev/null; then
     echo "✅ Retrieved mTLS certificates from Secrets Manager"
-    # Create secrets.json with mTLS certificates and endpoint
-    # Use a temporary file to avoid shell quoting issues with jq
     TMP_SECRETS=\$(mktemp)
     echo "\$MTLS_SECRET_VALUE" > "\$TMP_SECRETS"
-    
-    # Use timeout for jq processing as well (5 seconds max)
-    # Capture stderr to see errors if jq fails
-    JQ_OUTPUT=\$(timeout 5 jq -n \
-        --slurpfile cert_json "\$TMP_SECRETS" \
-        --arg endpoint "https://watermark.internal.staging.zing.you:8080" \
-        '{
-            MTLS_CLIENT_CERT_JSON: $cert_json[0],
-            ECS_WATERMARK_ENDPOINT: $endpoint
-        }' 2>&1)
+    JQ_OUTPUT=\$(timeout 5 jq -n --slurpfile cert_json "\$TMP_SECRETS" --arg endpoint "https://watermark.internal.staging.zing.you:8080" '{MTLS_CLIENT_CERT_JSON: $cert_json[0],ECS_WATERMARK_ENDPOINT: $endpoint}' 2>&1)
     JQ_EXIT_CODE=\$?
-    
     if [ \$JQ_EXIT_CODE -eq 0 ] && [ -n "\$JQ_OUTPUT" ]; then
-        # Write to secrets.json, using sudo if needed
-        if [ "\$USE_SUDO" = "true" ]; then
-            echo "\$JQ_OUTPUT" | sudo tee /opt/nautilus/secrets.json > /dev/null
-            sudo chmod 644 /opt/nautilus/secrets.json
-        else
-            echo "\$JQ_OUTPUT" > /opt/nautilus/secrets.json
-        fi
-        # Verify the JSON was created correctly
-        if ! jq empty /opt/nautilus/secrets.json 2>/dev/null; then
-            echo "⚠️  Warning: Failed to create valid secrets.json, using empty JSON"
-            if [ "\$USE_SUDO" = "true" ]; then
-                echo '{}' | sudo tee /opt/nautilus/secrets.json > /dev/null
-            else
-                echo '{}' > /opt/nautilus/secrets.json
-            fi
-        else
-            echo "✅ Created secrets.json with mTLS certificates at /opt/nautilus/secrets.json"
-        fi
+        [ ! -w /opt/nautilus ] && echo "\$JQ_OUTPUT" | sudo tee /opt/nautilus/secrets.json > /dev/null && sudo chmod 644 /opt/nautilus/secrets.json || echo "\$JQ_OUTPUT" > /opt/nautilus/secrets.json
+        jq empty /opt/nautilus/secrets.json 2>/dev/null || { echo "⚠️  Warning: Failed to create valid secrets.json";[ ! -w /opt/nautilus ] && echo '{}' | sudo tee /opt/nautilus/secrets.json > /dev/null || echo '{}' > /opt/nautilus/secrets.json; }
     else
-        echo "⚠️  Warning: jq processing timed out or failed (exit code: \$JQ_EXIT_CODE)"
-        echo "   jq error output: \$JQ_OUTPUT"
-        echo "   Using empty JSON as fallback"
-        if [ "\$USE_SUDO" = "true" ]; then
-            echo '{}' | sudo tee /opt/nautilus/secrets.json > /dev/null
-        else
-            echo '{}' > /opt/nautilus/secrets.json
-        fi
+        echo "⚠️  Warning: jq processing failed"
+        [ ! -w /opt/nautilus ] && echo '{}' | sudo tee /opt/nautilus/secrets.json > /dev/null || echo '{}' > /opt/nautilus/secrets.json
     fi
     rm -f "\$TMP_SECRETS"
 else
-    echo "⚠️  Failed to retrieve mTLS certificates from Secrets Manager, using empty secrets"
-    echo "   This is expected if the secret doesn't exist, IAM permissions are missing, or request timed out"
-    if [ "\$USE_SUDO" = "true" ]; then
-        echo '{}' | sudo tee /opt/nautilus/secrets.json > /dev/null
-    else
-        echo '{}' > /opt/nautilus/secrets.json
-    fi
+    echo "⚠️  Failed to retrieve mTLS certificates, using empty secrets"
+    [ ! -w /opt/nautilus ] && echo '{}' | sudo tee /opt/nautilus/secrets.json > /dev/null || echo '{}' > /opt/nautilus/secrets.json
 fi
-
-# Ensure we're in the correct directory and have write permissions
-cd /opt/nautilus || {
-    echo "Error: Cannot change to /opt/nautilus directory"
-    exit 1
-}
-
-# Check if we can write to the directory, if not, we'll use sudo for file operations
-if [ ! -w /opt/nautilus ]; then
-    echo "⚠️  Directory /opt/nautilus is not writable by current user, will use sudo for file operations"
-    USE_SUDO=true
-else
-    USE_SUDO=false
-fi
-
-# Use compiled socat if available, otherwise fallback to system socat
+cd /opt/nautilus || exit 1
 SOCAT_CMD=\$(command -v /usr/local/bin/socat || command -v socat || echo "socat")
-
-# Retry loop for secrets.json delivery (VSOCK)
 echo "Sending secrets to enclave via VSOCK (port 7777)..."
 for i in {1..5}; do
-  # Use sudo cat if file is not readable by current user
-  if [ ! -r /opt/nautilus/secrets.json ]; then
-    sudo cat /opt/nautilus/secrets.json | \$SOCAT_CMD - VSOCK-CONNECT:\$ENCLAVE_CID:7777 && break
-  else
-    cat /opt/nautilus/secrets.json | \$SOCAT_CMD - VSOCK-CONNECT:\$ENCLAVE_CID:7777 && break
-  fi
-  echo "Failed to connect to enclave on port 7777, retrying (\$i/5)..."
+  [ ! -r /opt/nautilus/secrets.json ] && sudo cat /opt/nautilus/secrets.json | \$SOCAT_CMD - VSOCK-CONNECT:\$ENCLAVE_CID:7777 && break || cat /opt/nautilus/secrets.json | \$SOCAT_CMD - VSOCK-CONNECT:\$ENCLAVE_CID:7777 && break
+  echo "Failed to connect, retrying (\$i/5)..."
   sleep 2
 done
-
-# Start socat forwarders
 echo "Exposing enclave port ${enclave_port} to host..."
 \$SOCAT_CMD TCP4-LISTEN:${enclave_port},reuseaddr,fork VSOCK-CONNECT:\$ENCLAVE_CID:${enclave_port} &
-
-echo "Exposing enclave port ${enclave_init_port} to localhost for init endpoints..."
+echo "Exposing enclave port ${enclave_init_port} to localhost..."
 \$SOCAT_CMD TCP4-LISTEN:${enclave_init_port},bind=127.0.0.1,reuseaddr,fork VSOCK-CONNECT:\$ENCLAVE_CID:${enclave_init_port} &
-
-# Start background process to capture enclave console output
 echo "Starting enclave console log capture..."
 mkdir -p /var/log
-
-# Kill any existing console capture process
 pkill -f "enclave-console-capture" || true
 sleep 1
-
-(
-  # Use a unique process name for easier management
-  exec -a "enclave-console-capture" bash -c '
-    LOG_FILE="/var/log/enclave-console.log"
-    LAST_ENCLAVE_ID=""
-    
-    while true; do
-      ENCLAVE_ID_CURRENT=\$(nitro-cli describe-enclaves 2>/dev/null | jq -r ".[0].EnclaveID // empty" || echo "")
-      
-      if [ -n "\$ENCLAVE_ID_CURRENT" ] && [ "\$ENCLAVE_ID_CURRENT" != "null" ]; then
-        # If enclave ID changed, reset (new enclave started)
-        if [ "\$ENCLAVE_ID_CURRENT" != "\$LAST_ENCLAVE_ID" ]; then
-          echo "[\$(date "+%Y-%m-%d %H:%M:%S")] Enclave started: \$ENCLAVE_ID_CURRENT" >> "\$LOG_FILE"
-          LAST_ENCLAVE_ID="\$ENCLAVE_ID_CURRENT"
-        fi
-        
-        # Capture console output with timeout (5 seconds max)
-        # Note: nitro-cli console may return all historical output, but we timestamp each line
-        timeout 5 nitro-cli console --enclave-id "\$ENCLAVE_ID_CURRENT" 2>&1 | \
-          while IFS= read -r line || [ -n "\$line" ]; do
-            # Skip empty lines
-            [ -z "\$line" ] && continue
-            # Add timestamp and write to log
-            echo "[\$(date "+%Y-%m-%d %H:%M:%S")] \$line" >> "\$LOG_FILE"
-          done || true
-      else
-        # No enclave running
-        if [ -n "\$LAST_ENCLAVE_ID" ]; then
-          echo "[\$(date "+%Y-%m-%d %H:%M:%S")] Enclave stopped (was: \$LAST_ENCLAVE_ID)" >> "\$LOG_FILE"
-          LAST_ENCLAVE_ID=""
-        fi
-      fi
-      
-      # Sleep before next capture (30 seconds)
-      sleep 30
-    done
-  '
-) &
-
-CONSOLE_CAPTURE_PID=\$!
-echo "✅ Enclave console log capture started (PID: \$CONSOLE_CAPTURE_PID)"
-echo "   Logs will be written to: /var/log/enclave-console.log"
-echo "   This includes all [RUN_SH] messages from the enclave"
-
+(exec -a "enclave-console-capture" bash -c 'LOG_FILE="/var/log/enclave-console.log";LAST_ENCLAVE_ID="";while true;do ENCLAVE_ID_CURRENT=\$(nitro-cli describe-enclaves 2>/dev/null | jq -r ".[0].EnclaveID // empty" || echo "");if [ -n "\$ENCLAVE_ID_CURRENT" ] && [ "\$ENCLAVE_ID_CURRENT" != "null" ];then if [ "\$ENCLAVE_ID_CURRENT" != "\$LAST_ENCLAVE_ID" ];then echo "[\$(date "+%Y-%m-%d %H:%M:%S")] Enclave started: \$ENCLAVE_ID_CURRENT" >> "\$LOG_FILE";LAST_ENCLAVE_ID="\$ENCLAVE_ID_CURRENT";fi;timeout 5 nitro-cli console --enclave-id "\$ENCLAVE_ID_CURRENT" 2>&1 | while IFS= read -r line || [ -n "\$line" ];do [ -z "\$line" ] && continue;echo "[\$(date "+%Y-%m-%d %H:%M:%S")] \$line" >> "\$LOG_FILE";done || true;else if [ -n "\$LAST_ENCLAVE_ID" ];then echo "[\$(date "+%Y-%m-%d %H:%M:%S")] Enclave stopped (was: \$LAST_ENCLAVE_ID)" >> "\$LOG_FILE";LAST_ENCLAVE_ID="";fi;fi;sleep 30;done') &
+echo "✅ Enclave console log capture started"
 echo "Enclave ports exposed successfully"
 EXPOSE_SCRIPT
   chmod +x /opt/nautilus/expose_enclave.sh
