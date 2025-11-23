@@ -28,6 +28,8 @@ terraform.tfstate.backup
 # 在執行 terraform plan 或 apply 時可能生成的檔案。
 .terraformrc
 crash.log
+*.tfplan
+tfplan
 
 # IDE 和作業系統生成的檔案：
 # 這些是開發環境或作業系統特有的檔案，通常不相關。
