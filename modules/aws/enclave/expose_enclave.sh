@@ -81,20 +81,22 @@ fi
 if [ -n "$ENCLAVE_CID" ] && [ "$ENCLAVE_CID" != "null" ]; then
   echo "Sending secrets.json to enclave via VSOCK (port 7777)..."
   SECRETS_SENT=false
-  for i in {1..5}; do
-    if timeout 5 cat "$SECRETS_FILE" | $SOCAT_CMD - VSOCK-CONNECT:$ENCLAVE_CID:7777 2>/dev/null; then
+  # Wait a bit first to ensure enclave's run.sh has started listening
+  sleep 5
+  for i in {1..15}; do
+    if timeout 3 cat "$SECRETS_FILE" | $SOCAT_CMD - VSOCK-CONNECT:$ENCLAVE_CID:7777 2>/dev/null; then
       echo "Successfully sent secrets.json to enclave"
       SECRETS_SENT=true
       break
     else
-      echo "Failed to connect to enclave on port 7777, retrying ($i/5)..."
-      sleep 2
+      echo "Failed to connect to enclave on port 7777, retrying ($i/15)..."
+      sleep 3
     fi
   done
 
   if [ "$SECRETS_SENT" = false ]; then
-    echo "Warning: Failed to send secrets.json to enclave after 5 attempts"
-    echo "Enclave will continue with empty secrets"
+    echo "Warning: Failed to send secrets.json to enclave after 15 attempts"
+    echo "Enclave will continue with empty secrets (run.sh has 30s timeout)"
   fi
 else
   echo "Warning: Cannot send secrets.json - enclave CID not available"
