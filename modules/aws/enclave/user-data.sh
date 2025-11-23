@@ -112,7 +112,7 @@ if retry 3 aws s3 ls "$EIF_S3_PATH" 2>/dev/null; then
         sudo grep -E "^\s*-\s*\{address:" /etc/nitro_enclaves/vsock-proxy.yaml.bak 2>/dev/null | \
           sed -E 's/.*\{address:\s*([^,]+),\s*port:\s*([0-9]+)\}.*/\1 \2/' | \
           sort -u | while read h p; do
-            [ -n "$h" ] && printf "  - address: %s\n    port: %s\n" "$h" "${p:-443}">>"$T"
+            [ -n "$h" ] && printf "  - address: %s\n    port: %s\n" "$h" "$${p:-443}">>"$T"
           done
       fi
       
