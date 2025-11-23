@@ -108,7 +108,7 @@ if [ "\$MTLS_SECRET_VALUE" != "{}" ] && [ -n "\$MTLS_SECRET_VALUE" ] && echo "\$
             echo "⚠️  Warning: Failed to create valid secrets.json, using empty JSON"
             echo '{}' > /opt/nautilus/secrets.json
         else
-            echo "✅ Created secrets.json with mTLS certificates"
+            echo "✅ Created secrets.json with mTLS certificates at /opt/nautilus/secrets.json"
         fi
     else
         echo "⚠️  Warning: jq processing timed out or failed, using empty JSON"
@@ -120,6 +120,12 @@ else
     echo "   This is expected if the secret doesn't exist, IAM permissions are missing, or request timed out"
     echo '{}' > /opt/nautilus/secrets.json
 fi
+
+# Ensure we're in the correct directory
+cd /opt/nautilus || {
+    echo "Error: Cannot change to /opt/nautilus directory"
+    exit 1
+}
 
 # Use compiled socat if available, otherwise fallback to system socat
 SOCAT_CMD=\$(command -v /usr/local/bin/socat || command -v socat || echo "socat")
