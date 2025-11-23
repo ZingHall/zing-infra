@@ -10,8 +10,9 @@ set +o pipefail
 ENCLAVE_PORT="${ENCLAVE_PORT:-3000}"
 ENCLAVE_INIT_PORT="${ENCLAVE_INIT_PORT:-3001}"
 
-# Ensure directory exists
-mkdir -p /opt/nautilus
+# Ensure directory exists with proper permissions
+sudo mkdir -p /opt/nautilus
+sudo chmod 755 /opt/nautilus
 
 # Get enclave ID and CID with retry logic
 ENCLAVE_ID=""
@@ -65,7 +66,8 @@ sleep 2
 # Create empty secrets.json if it doesn't exist
 SECRETS_FILE="/opt/nautilus/secrets.json"
 if [ ! -f "$SECRETS_FILE" ]; then
-  echo '{}' > "$SECRETS_FILE"
+  echo '{}' | sudo tee "$SECRETS_FILE" > /dev/null
+  sudo chmod 644 "$SECRETS_FILE"
   echo "Created empty secrets.json at $SECRETS_FILE"
 fi
 
