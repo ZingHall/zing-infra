@@ -10,3 +10,9 @@ variable "eif_version" {
   default     = "ecf8d8e"
 }
 
+variable "create_mtls_client_secret" {
+  description = "Whether to create a new mTLS client secret or use existing one. Set to true if the secret doesn't exist yet."
+  type        = bool
+  default     = false
+}
+

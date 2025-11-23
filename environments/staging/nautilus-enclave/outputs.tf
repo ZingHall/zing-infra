@@ -93,3 +93,13 @@ output "target_group_arn" {
   value       = module.alb.target_group_arns["enclave"]
 }
 
+output "mtls_client_secret_arn" {
+  description = "ARN of the Secrets Manager secret containing mTLS client certificates"
+  value       = var.create_mtls_client_secret ? aws_secretsmanager_secret.mtls_client_cert[0].arn : data.aws_secretsmanager_secret.mtls_client_cert[0].arn
+}
+
+output "mtls_client_secret_name" {
+  description = "Name of the Secrets Manager secret containing mTLS client certificates"
+  value       = var.create_mtls_client_secret ? aws_secretsmanager_secret.mtls_client_cert[0].name : data.aws_secretsmanager_secret.mtls_client_cert[0].name
+}
+
