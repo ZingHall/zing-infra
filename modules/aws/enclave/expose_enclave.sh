@@ -79,94 +79,12 @@ if ! command -v "$SOCAT_CMD" >/dev/null 2>&1; then
   # Don't exit - continue to try other operations
 fi
 
-# Send secrets.json to enclave via VSOCK (port 7777) - non-blocking
-# The enclave's run.sh now starts immediately with a background listener, so we can try to send
-# but don't need to wait or retry extensively since the listener is always running
-if [ -n "$ENCLAVE_CID" ] && [ "$ENCLAVE_CID" != "null" ]; then
-  echo "Sending secrets.json to enclave via VSOCK (port 7777)..."
-  
-  # Wait longer for enclave to fully start its VSOCK listener
-  # The enclave needs time to: start socat listeners, start background secrets listener
-  echo "Waiting for enclave VSOCK listener to be ready..."
-  sleep 8
-  
-  # Test if VSOCK port 7777 is accepting connections before sending secrets
-  VSOCK_READY=false
-  for test_attempt in {1..5}; do
-    if echo "test" | timeout 2 $SOCAT_CMD - VSOCK-CONNECT:$ENCLAVE_CID:7777 2>/dev/null; then
-      VSOCK_READY=true
-      echo "✅ VSOCK port 7777 is accepting connections"
-      break
-    else
-      echo "⏳ VSOCK listener not ready yet (attempt $test_attempt/5)..."
-      sleep 2
-    fi
-  done
-  
-  if [ "$VSOCK_READY" = "true" ]; then
-    # Try to send secrets with longer timeout
-    if timeout 5 cat "$SECRETS_FILE" | $SOCAT_CMD - VSOCK-CONNECT:$ENCLAVE_CID:7777 2>/dev/null; then
-      echo "✅ Successfully sent secrets.json to enclave"
-    else
-      echo "⚠️  Could not send secrets (timeout or connection refused)"
-      echo "   Will retry in background..."
-      
-      # Retry in background with exponential backoff
-      (
-        for i in 1 2 3 4 5; do
-          WAIT_TIME=$((2 ** i))  # 2, 4, 8, 16, 32 seconds
-          sleep $WAIT_TIME
-          if timeout 5 cat "$SECRETS_FILE" | $SOCAT_CMD - VSOCK-CONNECT:$ENCLAVE_CID:7777 2>/dev/null; then
-            echo "✅ Secrets sent successfully on retry attempt $i (after ${WAIT_TIME}s)"
-            exit 0
-          fi
-        done
-        echo "⚠️  Secrets not sent after all retries (enclave will continue without them)"
-      ) &
-    fi
-  else
-    echo "⚠️  VSOCK listener not responding after multiple attempts"
-    echo "   Secrets can be sent later via the /api/secrets endpoint if available"
-  fi
-else
-  echo "Warning: Cannot send secrets.json - enclave CID not available"
-fi
+# Secrets are now managed via HTTP API endpoint /api/secrets (no VSOCK 7777 listener)
+# This eliminates VSOCK timeout issues and allows dynamic secret updates
+echo "Note: Secrets can be configured via /api/secrets endpoint after enclave starts"
 
 # Start socat forwarders in background - only if CID is available
 if [ -n "$ENCLAVE_CID" ] && [ "$ENCLAVE_CID" != "null" ]; then
-  # Wait for enclave VSOCK listeners on ports 3000 and 3001 to be ready
-  echo "Checking if enclave VSOCK listeners are ready on ports $ENCLAVE_PORT and $ENCLAVE_INIT_PORT..."
-  
-  # Test port 3000
-  for test_attempt in {1..5}; do
-    if echo "test" | timeout 1 $SOCAT_CMD - VSOCK-CONNECT:$ENCLAVE_CID:$ENCLAVE_PORT 2>/dev/null; then
-      echo "✅ Enclave VSOCK listener on port $ENCLAVE_PORT is ready"
-      break
-    else
-      if [ $test_attempt -lt 5 ]; then
-        echo "⏳ Waiting for port $ENCLAVE_PORT... (attempt $test_attempt/5)"
-        sleep 2
-      else
-        echo "⚠️  Port $ENCLAVE_PORT not responding, will start forwarder anyway"
-      fi
-    fi
-  done
-  
-  # Test port 3001
-  for test_attempt in {1..5}; do
-    if echo "test" | timeout 1 $SOCAT_CMD - VSOCK-CONNECT:$ENCLAVE_CID:$ENCLAVE_INIT_PORT 2>/dev/null; then
-      echo "✅ Enclave VSOCK listener on port $ENCLAVE_INIT_PORT is ready"
-      break
-    else
-      if [ $test_attempt -lt 5 ]; then
-        echo "⏳ Waiting for port $ENCLAVE_INIT_PORT... (attempt $test_attempt/5)"
-        sleep 2
-      else
-        echo "⚠️  Port $ENCLAVE_INIT_PORT not responding, will start forwarder anyway"
-      fi
-    fi
-  done
-  
   echo "Exposing enclave port $ENCLAVE_PORT to host..."
   $SOCAT_CMD TCP4-LISTEN:$ENCLAVE_PORT,reuseaddr,fork VSOCK-CONNECT:$ENCLAVE_CID:$ENCLAVE_PORT >/dev/null 2>&1 &
   SOCAT_MAIN_PID=$!
