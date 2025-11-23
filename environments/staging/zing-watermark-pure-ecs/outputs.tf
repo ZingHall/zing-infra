@@ -33,3 +33,27 @@ output "mtls_secret_arn" {
   value       = var.create_mtls_secret ? aws_secretsmanager_secret.ecs_server_cert[0].arn : data.aws_secretsmanager_secret.ecs_server_cert[0].arn
 }
 
+# NLB Outputs
+output "nlb_dns_name" {
+  description = "DNS name of the Network Load Balancer"
+  value       = aws_lb.watermark_nlb.dns_name
+}
+
+output "nlb_arn" {
+  description = "ARN of the Network Load Balancer"
+  value       = aws_lb.watermark_nlb.arn
+}
+
+output "nlb_zone_id" {
+  description = "Zone ID of the Network Load Balancer (for Route53 alias)"
+  value       = aws_lb.watermark_nlb.zone_id
+}
+
+output "target_group_arn" {
+  description = "ARN of the Target Group"
+  value       = aws_lb_target_group.watermark.arn
+}
+
+# Note: NLB doesn't use security groups (Layer 4 load balancer)
+# Access control is via VPC routing and ECS security groups
+
