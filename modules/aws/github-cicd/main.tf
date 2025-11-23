@@ -160,9 +160,10 @@ resource "aws_iam_role_policy" "terraform_policy" {
           "autoscaling:*",
           # CloudWatch (metrics and alarms)
           "cloudwatch:*",
-          # Secrets Manager (for reading secret metadata and values)
+          # Secrets Manager (for reading secret metadata, values, and policies)
           "secretsmanager:DescribeSecret",
           "secretsmanager:GetSecretValue",
+          "secretsmanager:GetResourcePolicy",
           "secretsmanager:ListSecrets"
         ]
         Resource = "*"
