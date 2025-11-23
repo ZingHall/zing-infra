@@ -52,7 +52,7 @@ echo "Downloading expose_enclave.sh from S3..."
 EXPOSE_SCRIPT_S3="s3://${s3_bucket}/${eif_path}/expose_enclave.sh"
 if ! retry 3 aws s3 cp "$EXPOSE_SCRIPT_S3" /opt/nautilus/expose_enclave.sh; then
   echo "❌ Failed to download expose_enclave.sh from S3: $EXPOSE_SCRIPT_S3"
-  echo "   Please ensure the script is uploaded via CI/CD or manually"
+  echo "   Please ensure Terraform has uploaded the script to S3"
   exit 1
 fi
 chmod +x /opt/nautilus/expose_enclave.sh
@@ -118,19 +118,40 @@ if retry 3 aws s3 ls "$EIF_S3_PATH" 2>/dev/null; then
       
       # Add new endpoints from ALLOWED_ENDPOINTS
       for ep in $ALLOWED_ENDPOINTS; do
-        h=$(echo "$ep"|sed 's/:.*$//')
-        p=$(echo "$ep"|sed 's/.*://')
-        [ -z "$p" ] && p=443
+        # Check if endpoint contains port (has colon)
+        if echo "$ep" | grep -q ':'; then
+          h=$(echo "$ep"|sed 's/:.*$//')
+          p=$(echo "$ep"|sed 's/^[^:]*://')
+        else
+          # No port specified, use default 443
+          h="$ep"
+          p=443
+        fi
+        # Ensure port is numeric (default to 443 if invalid)
+        case "$p" in
+          ''|*[!0-9]*) p=443 ;;
+        esac
         grep -q "address: $h" "$T" || printf "  - address: %s\n    port: %s\n" "$h" "$p">>"$T"
       done
       
       sudo mv "$T" /etc/nitro_enclaves/vsock-proxy.yaml
       PORT=8101
       for ep in $ALLOWED_ENDPOINTS; do
-        h=$(echo "$ep"|sed 's/:.*$//')
+        # Extract hostname (same logic as above)
+        if echo "$ep" | grep -q ':'; then
+          h=$(echo "$ep"|sed 's/:.*$//')
+          p=$(echo "$ep"|sed 's/^[^:]*://')
+        else
+          h="$ep"
+          p=443
+        fi
+        # Ensure port is numeric (default to 443 if invalid)
+        case "$p" in
+          ''|*[!0-9]*) p=443 ;;
+        esac
         sudo pkill -f "vsock-proxy $PORT" 2>/dev/null || true
         sleep 1
-        sudo vsock-proxy $PORT $h 443 --config /etc/nitro_enclaves/vsock-proxy.yaml &
+        sudo vsock-proxy $PORT $h $p --config /etc/nitro_enclaves/vsock-proxy.yaml &
         PORT=$((PORT+1))
       done
       echo "✅ vsock-proxy configuration completed"

@@ -145,6 +145,32 @@ resource "aws_iam_role_policy_attachment" "ssm_managed_instance_core" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
+# Upload expose_enclave.sh to S3 (host-side script, not part of enclave)
+resource "aws_s3_object" "expose_enclave_script" {
+  bucket = var.s3_bucket_name
+  key    = "${var.eif_path}/expose_enclave.sh"
+  source = "${path.module}/expose_enclave.sh"
+
+  # Ensure the script is updated when the file changes
+  etag = filemd5("${path.module}/expose_enclave.sh")
+
+  # Make it readable
+  acl = "private"
+
+  # Metadata for tracking
+  metadata = {
+    managed_by = "terraform"
+    module     = "aws/enclave"
+  }
+
+  tags = merge(
+    var.tags,
+    {
+      Name = "${var.name}-expose-enclave-script"
+    }
+  )
+}
+
 # IAM Instance Profile
 resource "aws_iam_instance_profile" "enclave" {
   name = "${var.name}-enclave-profile"
