@@ -7,7 +7,7 @@ variable "aws_profile" {
 variable "eif_version" {
   description = "Version/tag of the EIF file to deploy (e.g., commit SHA). Update this when deploying new enclave versions."
   type        = string
-  default     = "4bf594a"
+  default     = "26d1b39"
 }
 
 # Note: create_mtls_client_secret variable removed
