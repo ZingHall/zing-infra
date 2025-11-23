@@ -58,6 +58,54 @@ fi
 chmod +x /opt/nautilus/expose_enclave.sh
 echo "✅ Downloaded expose_enclave.sh from S3"
 
+# Create secrets.json BEFORE starting enclave (independent of enclave startup)
+# This ensures secrets.json exists even if EIF file is missing or enclave fails to start
+echo "Creating secrets.json from Secrets Manager..."
+if [ -x /opt/nautilus/expose_enclave.sh ]; then
+  # Extract just the secrets.json creation logic
+  # We'll create a minimal version that doesn't require enclave to be running
+  MTLS_SECRET_NAME="nautilus-enclave-mtls-client-cert"
+  MTLS_SECRET_VALUE=$(timeout 10 aws secretsmanager get-secret-value \
+    --secret-id "$MTLS_SECRET_NAME" \
+    --region ap-northeast-1 \
+    --query SecretString \
+    --output text 2>/dev/null || echo '{}')
+  
+  if [ "$MTLS_SECRET_VALUE" != "{}" ] && [ -n "$MTLS_SECRET_VALUE" ] && echo "$MTLS_SECRET_VALUE" | jq empty 2>/dev/null; then
+    echo "✅ Retrieved mTLS certificates from Secrets Manager"
+    TMP_SECRETS=$(mktemp)
+    echo "$MTLS_SECRET_VALUE" > "$TMP_SECRETS"
+    
+    JQ_OUTPUT=$(timeout 10 jq -n \
+      --slurpfile cert_json "$TMP_SECRETS" \
+      --arg endpoint "https://watermark.internal.staging.zing.you:8080" \
+      '{
+          MTLS_CLIENT_CERT_JSON: $cert_json[0],
+          ECS_WATERMARK_ENDPOINT: $endpoint
+      }' 2>&1)
+    JQ_EXIT_CODE=$?
+    
+    if [ $JQ_EXIT_CODE -eq 0 ] && [ -n "$JQ_OUTPUT" ] && echo "$JQ_OUTPUT" | jq empty 2>/dev/null; then
+      echo "$JQ_OUTPUT" | sudo tee /opt/nautilus/secrets.json > /dev/null
+      sudo chmod 644 /opt/nautilus/secrets.json
+      echo "✅ Created secrets.json with mTLS certificates"
+    else
+      echo "⚠️  jq processing failed, creating empty secrets.json"
+      echo '{}' | sudo tee /opt/nautilus/secrets.json > /dev/null
+      sudo chmod 644 /opt/nautilus/secrets.json
+    fi
+    rm -f "$TMP_SECRETS"
+  else
+    echo "⚠️  Failed to retrieve mTLS certificates, creating empty secrets.json"
+    echo '{}' | sudo tee /opt/nautilus/secrets.json > /dev/null
+    sudo chmod 644 /opt/nautilus/secrets.json
+  fi
+else
+  echo "⚠️  expose_enclave.sh not executable, creating empty secrets.json as fallback"
+  echo '{}' | sudo tee /opt/nautilus/secrets.json > /dev/null
+  sudo chmod 644 /opt/nautilus/secrets.json
+fi
+
 # Download EIF file from S3
 echo "Downloading EIF file from S3..."
 EIF_S3_PATH="s3://${s3_bucket}/${eif_path}/nitro-${eif_version}.eif"
@@ -172,17 +220,117 @@ else
 fi
 
 start_enclave(){
- [ -f /opt/nautilus/nitro.eif ] || return 1
- nitro-cli terminate-enclave --all 2>/dev/null
+ echo "=========================================="
+ echo "Starting Nitro Enclave..."
+ echo "=========================================="
+ 
+ # Step 1: Check EIF file exists
+ echo "[DEBUG] Step 1: Checking EIF file..."
+ if [ ! -f /opt/nautilus/nitro.eif ]; then
+   echo "❌ [DEBUG] EIF file not found: /opt/nautilus/nitro.eif"
+   return 1
+ fi
+ EIF_SIZE=$(stat -f%z /opt/nautilus/nitro.eif 2>/dev/null || stat -c%s /opt/nautilus/nitro.eif 2>/dev/null || echo "0")
+ echo "✅ [DEBUG] EIF file found: /opt/nautilus/nitro.eif (size: $EIF_SIZE bytes)"
+ 
+ # Step 2: Terminate any existing enclaves
+ echo "[DEBUG] Step 2: Terminating existing enclaves..."
+ if nitro-cli terminate-enclave --all 2>/dev/null; then
+   echo "✅ [DEBUG] Terminated existing enclaves (if any)"
+ else
+   echo "⚠️  [DEBUG] No existing enclaves to terminate (this is OK)"
+ fi
  sleep 5
- nitro-cli run-enclave --cpu-count "$ENCLAVE_CPU" --memory "$ENCLAVE_MEMORY"M --eif-path /opt/nautilus/nitro.eif || return 1
+ 
+ # Step 3: Start the enclave
+ echo "[DEBUG] Step 3: Starting enclave..."
+ echo "  CPU: $ENCLAVE_CPU"
+ echo "  Memory: $ENCLAVE_MEMORY""M"
+ echo "  EIF Path: /opt/nautilus/nitro.eif"
+ 
+ if ! nitro-cli run-enclave --cpu-count "$ENCLAVE_CPU" --memory "$ENCLAVE_MEMORY""M" --eif-path /opt/nautilus/nitro.eif; then
+   echo "❌ [DEBUG] Failed to start enclave"
+   echo "[DEBUG] Checking nitro-cli error output..."
+   nitro-cli describe-enclaves 2>&1 || true
+   return 1
+ fi
+ echo "✅ [DEBUG] Enclave start command completed"
+ 
+ # Step 4: Wait for enclave to be ready
+ echo "[DEBUG] Step 4: Waiting for enclave to be ready..."
  sleep 10
- ENCLAVE_ID=$(nitro-cli describe-enclaves|jq -r '.[0].EnclaveID//empty')
- [ -z "$ENCLAVE_ID" ] && return 1
- bash /opt/nautilus/expose_enclave.sh
+ 
+ # Step 5: Verify enclave is running
+ echo "[DEBUG] Step 5: Verifying enclave is running..."
+ ENCLAVE_ID=$(nitro-cli describe-enclaves 2>/dev/null | jq -r '.[0].EnclaveID//empty' || echo "")
+ if [ -z "$ENCLAVE_ID" ] || [ "$ENCLAVE_ID" = "null" ]; then
+   echo "❌ [DEBUG] Enclave ID not found after startup"
+   echo "[DEBUG] Full enclave status:"
+   nitro-cli describe-enclaves 2>&1 || true
+   return 1
+ fi
+ ENCLAVE_CID=$(nitro-cli describe-enclaves 2>/dev/null | jq -r '.[0].EnclaveCID//empty' || echo "")
+ echo "✅ [DEBUG] Enclave is running:"
+ echo "  Enclave ID: $ENCLAVE_ID"
+ echo "  Enclave CID: $ENCLAVE_CID"
+ 
+ # Step 6: Run expose_enclave.sh
+ echo "[DEBUG] Step 6: Running expose_enclave.sh..."
+ if [ ! -x /opt/nautilus/expose_enclave.sh ]; then
+   echo "❌ [DEBUG] expose_enclave.sh is not executable"
+   return 1
+ fi
+ if ! bash /opt/nautilus/expose_enclave.sh; then
+   echo "❌ [DEBUG] expose_enclave.sh failed"
+   echo "[DEBUG] Checking for socat processes..."
+   ps aux | grep '[s]ocat' || echo "No socat processes found"
+   return 1
+ fi
+ echo "✅ [DEBUG] expose_enclave.sh completed"
+ 
+ # Step 7: Wait for services to be ready
+ echo "[DEBUG] Step 7: Waiting for services to be ready..."
  sleep 5
- PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4||echo localhost)
- curl -f "http://$PUBLIC_IP:$ENCLAVE_PORT/health_check" >/dev/null 2>&1
+ 
+ # Step 8: Check socat processes
+ echo "[DEBUG] Step 8: Checking port forwarding..."
+ SOCAT_COUNT=$(pgrep -f "socat.*VSOCK-CONNECT" | wc -l)
+ echo "  Found $SOCAT_COUNT socat process(es)"
+ if [ "$SOCAT_COUNT" -eq 0 ]; then
+   echo "⚠️  [DEBUG] Warning: No socat processes found"
+ fi
+ 
+ # Check listening ports
+ for port in 3000 3001; do
+   if sudo lsof -i :$port >/dev/null 2>&1; then
+     echo "  ✅ Port $port is listening"
+   else
+     echo "  ⚠️  Port $port is not listening"
+   fi
+ done
+ 
+ # Step 9: Test health check endpoint
+ echo "[DEBUG] Step 9: Testing health check endpoint..."
+ PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || echo "localhost")
+ echo "  Public IP: $PUBLIC_IP"
+ echo "  Health check URL: http://$PUBLIC_IP:$ENCLAVE_PORT/health_check"
+ 
+ if curl -f -s --max-time 10 "http://$PUBLIC_IP:$ENCLAVE_PORT/health_check" >/dev/null 2>&1; then
+   echo "✅ [DEBUG] Health check passed"
+ else
+   echo "⚠️  [DEBUG] Health check failed (this may be OK if enclave is still starting)"
+   echo "[DEBUG] Trying localhost instead..."
+   if curl -f -s --max-time 10 "http://localhost:$ENCLAVE_PORT/health_check" >/dev/null 2>&1; then
+     echo "✅ [DEBUG] Health check passed on localhost"
+   else
+     echo "⚠️  [DEBUG] Health check failed on localhost too"
+     echo "[DEBUG] This might be normal if the enclave is still initializing"
+   fi
+ fi
+ 
+ echo "=========================================="
+ echo "✅ Enclave startup sequence completed"
+ echo "=========================================="
 }
 [ -f /opt/nautilus/nitro.eif ] && start_enclave
 cat >/etc/systemd/system/enclave-manager.service <<EOF

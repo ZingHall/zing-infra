@@ -33,89 +33,167 @@ done
 
 sleep 2
 
-# Load mTLS client certificates from Secrets Manager
-# Use timeout to prevent blocking enclave startup if Secrets Manager is slow
-echo "Loading mTLS client certificates from Secrets Manager..."
-MTLS_SECRET_NAME="nautilus-enclave-mtls-client-cert"
-
-# Use timeout to prevent blocking (10 seconds max)
-MTLS_SECRET_VALUE=$(timeout 10 aws secretsmanager get-secret-value \
-    --secret-id "$MTLS_SECRET_NAME" \
-    --region ap-northeast-1 \
-    --query SecretString \
-    --output text 2>/dev/null || echo '{}')
-
-# Validate and create secrets.json
-if [ "$MTLS_SECRET_VALUE" != "{}" ] && [ -n "$MTLS_SECRET_VALUE" ] && echo "$MTLS_SECRET_VALUE" | jq empty 2>/dev/null; then
-    echo "✅ Retrieved mTLS certificates from Secrets Manager"
-    # Create secrets.json with mTLS certificates and endpoint
-    # Use a temporary file to avoid shell quoting issues with jq
-    TMP_SECRETS=$(mktemp)
-    echo "$MTLS_SECRET_VALUE" > "$TMP_SECRETS"
+# Load mTLS client certificates from Secrets Manager (only if secrets.json doesn't exist)
+# Note: secrets.json is typically created by user-data.sh during instance boot
+# This section only runs if the file is missing (e.g., after manual deletion or on first run)
+if [ ! -f /opt/nautilus/secrets.json ]; then
+    echo "secrets.json not found, creating from Secrets Manager..."
+    MTLS_SECRET_NAME="nautilus-enclave-mtls-client-cert"
     
-    # Use timeout for jq processing (10 seconds max - increased from 5s for large certs)
-    # Capture stderr to see errors if jq fails
-    JQ_OUTPUT=$(timeout 10 jq -n \
-        --slurpfile cert_json "$TMP_SECRETS" \
-        --arg endpoint "https://watermark.internal.staging.zing.you:8080" \
-        '{
-            MTLS_CLIENT_CERT_JSON: $cert_json[0],
-            ECS_WATERMARK_ENDPOINT: $endpoint
-        }' 2>&1)
-    JQ_EXIT_CODE=$?
+    # Use timeout to prevent blocking (10 seconds max)
+    MTLS_SECRET_VALUE=$(timeout 10 aws secretsmanager get-secret-value \
+        --secret-id "$MTLS_SECRET_NAME" \
+        --region ap-northeast-1 \
+        --query SecretString \
+        --output text 2>/dev/null || echo '{}')
     
-    if [ $JQ_EXIT_CODE -eq 0 ] && [ -n "$JQ_OUTPUT" ]; then
-        # Write to secrets.json, using sudo if needed
-        if [ "$USE_SUDO" = "true" ]; then
-            echo "$JQ_OUTPUT" | sudo tee /opt/nautilus/secrets.json > /dev/null
-            sudo chmod 644 /opt/nautilus/secrets.json
+    # Validate and create secrets.json
+    if [ "$MTLS_SECRET_VALUE" != "{}" ] && [ -n "$MTLS_SECRET_VALUE" ] && echo "$MTLS_SECRET_VALUE" | jq empty 2>/dev/null; then
+        echo "✅ Retrieved mTLS certificates from Secrets Manager"
+        # Create secrets.json with mTLS certificates and endpoint
+        # Use a temporary file to avoid shell quoting issues with jq
+        TMP_SECRETS=$(mktemp)
+        echo "$MTLS_SECRET_VALUE" > "$TMP_SECRETS"
+        
+        # Use timeout for jq processing (10 seconds max - increased from 5s for large certs)
+        # Capture stderr to see errors if jq fails
+        JQ_OUTPUT=$(timeout 10 jq -n \
+            --slurpfile cert_json "$TMP_SECRETS" \
+            --arg endpoint "https://watermark.internal.staging.zing.you:8080" \
+            '{
+                MTLS_CLIENT_CERT_JSON: $cert_json[0],
+                ECS_WATERMARK_ENDPOINT: $endpoint
+            }' 2>&1)
+        JQ_EXIT_CODE=$?
+        
+        if [ $JQ_EXIT_CODE -eq 0 ] && [ -n "$JQ_OUTPUT" ]; then
+            # Write to secrets.json, using sudo if needed
+            if [ "$USE_SUDO" = "true" ]; then
+                echo "$JQ_OUTPUT" | sudo tee /opt/nautilus/secrets.json > /dev/null
+                sudo chmod 644 /opt/nautilus/secrets.json
+            else
+                echo "$JQ_OUTPUT" > /opt/nautilus/secrets.json
+            fi
+            # Verify the JSON was created correctly
+            if ! jq empty /opt/nautilus/secrets.json 2>/dev/null; then
+                echo "⚠️  Warning: Failed to create valid secrets.json, using empty JSON"
+                if [ "$USE_SUDO" = "true" ]; then
+                    echo '{}' | sudo tee /opt/nautilus/secrets.json > /dev/null
+                else
+                    echo '{}' > /opt/nautilus/secrets.json
+                fi
+            else
+                echo "✅ Created secrets.json with mTLS certificates at /opt/nautilus/secrets.json"
+            fi
         else
-            echo "$JQ_OUTPUT" > /opt/nautilus/secrets.json
-        fi
-        # Verify the JSON was created correctly
-        if ! jq empty /opt/nautilus/secrets.json 2>/dev/null; then
-            echo "⚠️  Warning: Failed to create valid secrets.json, using empty JSON"
+            echo "⚠️  Warning: jq processing timed out or failed (exit code: $JQ_EXIT_CODE)"
+            echo "   jq error output: $JQ_OUTPUT"
+            echo "   Using empty JSON as fallback"
             if [ "$USE_SUDO" = "true" ]; then
                 echo '{}' | sudo tee /opt/nautilus/secrets.json > /dev/null
             else
                 echo '{}' > /opt/nautilus/secrets.json
             fi
-        else
-            echo "✅ Created secrets.json with mTLS certificates at /opt/nautilus/secrets.json"
         fi
+        rm -f "$TMP_SECRETS"
     else
-        echo "⚠️  Warning: jq processing timed out or failed (exit code: $JQ_EXIT_CODE)"
-        echo "   jq error output: $JQ_OUTPUT"
-        echo "   Using empty JSON as fallback"
+        echo "⚠️  Failed to retrieve mTLS certificates from Secrets Manager, using empty secrets"
+        echo "   This is expected if the secret doesn't exist, IAM permissions are missing, or request timed out"
         if [ "$USE_SUDO" = "true" ]; then
             echo '{}' | sudo tee /opt/nautilus/secrets.json > /dev/null
         else
             echo '{}' > /opt/nautilus/secrets.json
         fi
     fi
-    rm -f "$TMP_SECRETS"
 else
-    echo "⚠️  Failed to retrieve mTLS certificates from Secrets Manager, using empty secrets"
-    echo "   This is expected if the secret doesn't exist, IAM permissions are missing, or request timed out"
-    if [ "$USE_SUDO" = "true" ]; then
-        echo '{}' | sudo tee /opt/nautilus/secrets.json > /dev/null
-    else
-        echo '{}' > /opt/nautilus/secrets.json
-    fi
+    echo "✅ secrets.json already exists, skipping creation"
 fi
 
-# Retry loop for secrets.json delivery (VSOCK)
-echo "Sending secrets to enclave via VSOCK (port 7777)..."
-for i in {1..5}; do
-    # Use sudo cat if file is not readable by current user
-    if [ ! -r /opt/nautilus/secrets.json ]; then
-        sudo cat /opt/nautilus/secrets.json | socat - VSOCK-CONNECT:$ENCLAVE_CID:7777 && break
+# Function to send secrets via HTTP API (preferred method)
+send_secrets_via_http() {
+    local max_retries=15
+    local retry=0
+    local wait_time=2
+    
+    echo "Attempting to send secrets via HTTP API (port 3001)..."
+    
+    # Get API key from environment or use default (should be set via Secrets Manager in production)
+    local api_key="${SECRETS_API_KEY:-nautilus-secrets-api-key-change-in-production}"
+    
+    # Generate timestamp for request
+    local timestamp=$(date +%s)
+    
+    # Read secrets.json for signature calculation
+    local secrets_content
+    if [ -r /opt/nautilus/secrets.json ]; then
+        secrets_content=$(cat /opt/nautilus/secrets.json)
     else
-        cat /opt/nautilus/secrets.json | socat - VSOCK-CONNECT:$ENCLAVE_CID:7777 && break
+        secrets_content=$(sudo cat /opt/nautilus/secrets.json)
     fi
-    echo "Failed to connect to enclave on port 7777, retrying ($i/5)..."
-    sleep 2
-done
+    
+    # Create request payload with security fields
+    local temp_payload=$(mktemp)
+    echo "$secrets_content" | jq --arg ts "$timestamp" '. + {timestamp: ($ts | tonumber)}' > "$temp_payload" 2>/dev/null || {
+        # If jq fails, add timestamp manually
+        echo "$secrets_content" | sed "s/}$/,\"timestamp\":$timestamp}/" > "$temp_payload"
+    }
+    
+    while [ $retry -lt $max_retries ]; do
+        # Wait for enclave HTTP server to be ready
+        if curl -f -s --max-time 3 http://localhost:3001/ping >/dev/null 2>&1; then
+            echo "✅ Enclave HTTP server is ready"
+            
+            # Send secrets via HTTP with authentication
+            local http_code
+            http_code=$(curl -f -s --max-time 10 -w "%{http_code}" -o /tmp/http_response.json \
+                -X POST http://localhost:3001/admin/update-secrets \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer $api_key" \
+                -d @"$temp_payload" 2>/dev/null || echo "000")
+            
+            if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
+                echo "✅ Successfully sent secrets via HTTP API (HTTP $http_code)"
+                cat /tmp/http_response.json 2>/dev/null | jq . 2>/dev/null || cat /tmp/http_response.json 2>/dev/null
+                rm -f "$temp_payload" /tmp/http_response.json
+                return 0
+            else
+                echo "⚠️  HTTP request failed (HTTP $http_code), checking response..."
+                cat /tmp/http_response.json 2>/dev/null | jq . 2>/dev/null || cat /tmp/http_response.json 2>/dev/null || true
+                rm -f /tmp/http_response.json
+                
+                # Try with verbose output for debugging
+                if [ $retry -eq 2 ]; then
+                    echo "Debug: Full HTTP request/response:"
+                    curl -v -X POST http://localhost:3001/admin/update-secrets \
+                        -H "Content-Type: application/json" \
+                        -H "Authorization: Bearer $api_key" \
+                        -d @"$temp_payload" 2>&1 | head -30 || true
+                fi
+            fi
+        else
+            echo "Enclave HTTP server not ready yet (attempt $retry/$max_retries)..."
+        fi
+        
+        sleep $wait_time
+        retry=$((retry + 1))
+    done
+    
+    rm -f "$temp_payload" /tmp/http_response.json
+    echo "⚠️  Failed to send secrets via HTTP after $max_retries attempts"
+    return 1
+}
+
+# Send secrets via HTTP API (only method)
+echo "Sending secrets to enclave via HTTP API..."
+if ! send_secrets_via_http; then
+    echo "⚠️  Failed to send secrets via HTTP API"
+    echo "   The enclave may not be ready yet, or there may be a connectivity issue"
+    echo "   You can retry manually:"
+    echo "     curl -X POST http://localhost:3001/admin/update-secrets \\"
+    echo "       -H 'Content-Type: application/json' \\"
+    echo "       -H 'Authorization: Bearer \$SECRETS_API_KEY' \\"
+    echo "       -d @/opt/nautilus/secrets.json"
+fi
 
 # Start socat forwarders for host <-> enclave
 echo "Exposing enclave port 3000 to host..."
