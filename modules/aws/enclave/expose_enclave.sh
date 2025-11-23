@@ -20,8 +20,8 @@ done
 sleep 2
 
 # Create empty secrets.json
-# echo "Creating empty secrets.json..."
-# echo '{}' > secrets.json
+echo "Creating empty secrets.json..."
+echo '{}' > secrets.json
 
 # Retry loop for secrets.json delivery (VSOCK)
 for i in {1..5}; do
