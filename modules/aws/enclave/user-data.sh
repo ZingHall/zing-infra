@@ -144,13 +144,36 @@ done
 
 sleep 2
 
-# Create empty secrets.json
-echo '{}' > /opt/nautilus/secrets.json
+# Load mTLS client certificates from Secrets Manager
+echo "Loading mTLS client certificates from Secrets Manager..."
+MTLS_SECRET_NAME="nautilus-enclave-mtls-client-cert"
+MTLS_SECRET_VALUE=\$(aws secretsmanager get-secret-value \
+    --secret-id "\$MTLS_SECRET_NAME" \
+    --region ap-northeast-1 \
+    --query SecretString \
+    --output text 2>/dev/null || echo '{}')
+
+if [ "\$MTLS_SECRET_VALUE" != "{}" ] && echo "\$MTLS_SECRET_VALUE" | jq empty 2>/dev/null; then
+    echo "✅ Retrieved mTLS certificates from Secrets Manager"
+    # Create secrets.json with mTLS certificates and endpoint
+    jq -n \
+        --argjson cert_json "\$MTLS_SECRET_VALUE" \
+        --arg endpoint "https://watermark.internal.staging.zing.you:8080" \
+        '{
+            MTLS_CLIENT_CERT_JSON: $cert_json,
+            ECS_WATERMARK_ENDPOINT: $endpoint
+        }' > /opt/nautilus/secrets.json
+else
+    echo "⚠️  Failed to retrieve mTLS certificates from Secrets Manager, using empty secrets"
+    echo "   This is expected if the secret doesn't exist or IAM permissions are missing"
+    echo '{}' > /opt/nautilus/secrets.json
+fi
 
 # Use compiled socat if available, otherwise fallback to system socat
 SOCAT_CMD=\$(command -v /usr/local/bin/socat || command -v socat || echo "socat")
 
 # Retry loop for secrets.json delivery (VSOCK)
+echo "Sending secrets to enclave via VSOCK (port 7777)..."
 for i in {1..5}; do
   cat /opt/nautilus/secrets.json | \$SOCAT_CMD - VSOCK-CONNECT:\$ENCLAVE_CID:7777 && break
   echo "Failed to connect to enclave on port 7777, retrying (\$i/5)..."

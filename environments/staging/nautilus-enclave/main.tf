@@ -136,7 +136,13 @@ module "nautilus_enclave" {
   # Allow traffic from ALB security group (will be added via security_group_rule)
   allowed_cidr_blocks = []
 
-  secrets_arns = []
+  # Secrets Manager ARNs for mTLS client certificates
+  # The EC2 instance role will be granted access to these secrets
+  # Using wildcard (*) to support secret versions
+  secrets_arns = [
+    "arn:aws:secretsmanager:ap-northeast-1:287767576800:secret:nautilus-enclave-mtls-client-cert-*"
+  ]
+
 
   enable_auto_scaling       = true
   target_cpu_utilization    = 70
