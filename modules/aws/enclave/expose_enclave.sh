@@ -1,38 +1,47 @@
 #!/bin/bash
-# SPDX-License-Identifier: Apache-2.0
+# Expose enclave ports to host
 
-# Get the enclave id and CID
-ENCLAVE_ID=$(nitro-cli describe-enclaves | jq -r ".[0].EnclaveID")
-ENCLAVE_CID=$(nitro-cli describe-enclaves | jq -r ".[0].EnclaveCID")
+ENCLAVE_ID=\$(nitro-cli describe-enclaves | jq -r '.[0].EnclaveID // empty')
+ENCLAVE_CID=\$(nitro-cli describe-enclaves | jq -r '.[0].EnclaveCID // empty')
 
-echo "Using Enclave ID: $ENCLAVE_ID, CID: $ENCLAVE_CID"
+if [ -z "\$ENCLAVE_ID" ]; then
+  echo "Error: No enclave found"
+  exit 1
+fi
 
-# Kill any socat processes using ports 3000 or 3001
-echo "Cleaning up old socat processes..."
-for port in 3000 3001; do
-    PIDS=$(sudo lsof -t -i :$port)
-    if [ -n "$PIDS" ]; then
-        echo "Killing socat processes on port $port: $PIDS"
-        sudo kill -9 $PIDS
-    fi
+echo "Using Enclave ID: \$ENCLAVE_ID, CID: \$ENCLAVE_CID"
+
+# Kill any existing socat processes
+for port in ${enclave_port} ${enclave_init_port}; do
+  PIDS=\$(sudo lsof -t -i :\$port 2>/dev/null || true)
+  if [ -n "\$PIDS" ]; then
+    echo "Killing processes on port \$port: \$PIDS"
+    sudo kill -9 \$PIDS || true
+  fi
 done
 
 sleep 2
 
 # Create empty secrets.json
-echo "Creating empty secrets.json..."
-echo '{}' > secrets.json
+if [ ! -f /opt/nautilus/secrets.json ]; then
+  echo '{}' > /opt/nautilus/secrets.json
+fi
+
+# Use compiled socat if available, otherwise fallback to system socat
+SOCAT_CMD=\$(command -v /usr/local/bin/socat || command -v socat || echo "socat")
 
 # Retry loop for secrets.json delivery (VSOCK)
 for i in {1..5}; do
-    cat secrets.json | socat - VSOCK-CONNECT:$ENCLAVE_CID:7777 && break
-    echo "Failed to connect to enclave on port 7777, retrying ($i/5)..."
-    sleep 2
+  cat /opt/nautilus/secrets.json | \$SOCAT_CMD - VSOCK-CONNECT:\$ENCLAVE_CID:7777 && break
+  echo "Failed to connect to enclave on port 7777, retrying (\$i/5)..."
+  sleep 2
 done
 
-# Start socat forwarders for host <-> enclave
-echo "Exposing enclave port 3000 to host..."
-socat TCP4-LISTEN:3000,reuseaddr,fork VSOCK-CONNECT:$ENCLAVE_CID:3000 &
+# Start socat forwarders
+echo "Exposing enclave port ${enclave_port} to host..."
+\$SOCAT_CMD TCP4-LISTEN:${enclave_port},reuseaddr,fork VSOCK-CONNECT:\$ENCLAVE_CID:${enclave_port} &
 
-echo "Exposing enclave port 3001 to localhost for init endpoints..."
-socat TCP4-LISTEN:3001,bind=127.0.0.1,reuseaddr,fork VSOCK-CONNECT:$ENCLAVE_CID:3001 &
+echo "Exposing enclave port ${enclave_init_port} to localhost for init endpoints..."
+\$SOCAT_CMD TCP4-LISTEN:${enclave_init_port},bind=127.0.0.1,reuseaddr,fork VSOCK-CONNECT:\$ENCLAVE_CID:${enclave_init_port} &
+
+echo "Enclave ports exposed successfully"

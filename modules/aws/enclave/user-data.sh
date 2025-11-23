@@ -127,6 +127,54 @@ fi
 chmod +x /opt/nautilus/expose_enclave.sh
 echo "✅ Downloaded expose_enclave.sh from S3"
 
+# Create secrets.json BEFORE starting enclave (independent of enclave startup)
+# This ensures secrets.json exists even if EIF file is missing or enclave fails to start
+echo "Creating secrets.json from Secrets Manager..."
+if [ -x /opt/nautilus/expose_enclave.sh ]; then
+  # Extract just the secrets.json creation logic
+  # We'll create a minimal version that doesn't require enclave to be running
+  MTLS_SECRET_NAME="nautilus-enclave-mtls-client-cert"
+  MTLS_SECRET_VALUE=$(timeout 10 aws secretsmanager get-secret-value \
+    --secret-id "$MTLS_SECRET_NAME" \
+    --region ap-northeast-1 \
+    --query SecretString \
+    --output text 2>/dev/null || echo '{}')
+  
+  if [ "$MTLS_SECRET_VALUE" != "{}" ] && [ -n "$MTLS_SECRET_VALUE" ] && echo "$MTLS_SECRET_VALUE" | jq empty 2>/dev/null; then
+    echo "✅ Retrieved mTLS certificates from Secrets Manager"
+    TMP_SECRETS=$(mktemp)
+    echo "$MTLS_SECRET_VALUE" > "$TMP_SECRETS"
+    
+    JQ_OUTPUT=$(timeout 10 jq -n \
+      --slurpfile cert_json "$TMP_SECRETS" \
+      --arg endpoint "https://watermark.internal.staging.zing.you:8080" \
+      '{
+          MTLS_CLIENT_CERT_JSON: $cert_json[0],
+          ECS_WATERMARK_ENDPOINT: $endpoint
+      }' 2>&1)
+    JQ_EXIT_CODE=$?
+    
+    if [ $JQ_EXIT_CODE -eq 0 ] && [ -n "$JQ_OUTPUT" ] && echo "$JQ_OUTPUT" | jq empty 2>/dev/null; then
+      echo "$JQ_OUTPUT" | sudo tee /opt/nautilus/secrets.json > /dev/null
+      sudo chmod 644 /opt/nautilus/secrets.json
+      echo "✅ Created secrets.json with mTLS certificates"
+    else
+      echo "⚠️  jq processing failed, creating empty secrets.json"
+      echo '{}' | sudo tee /opt/nautilus/secrets.json > /dev/null
+      sudo chmod 644 /opt/nautilus/secrets.json
+    fi
+    rm -f "$TMP_SECRETS"
+  else
+    echo "⚠️  Failed to retrieve mTLS certificates, creating empty secrets.json"
+    echo '{}' | sudo tee /opt/nautilus/secrets.json > /dev/null
+    sudo chmod 644 /opt/nautilus/secrets.json
+  fi
+else
+  echo "⚠️  expose_enclave.sh not executable, creating empty secrets.json as fallback"
+  echo '{}' | sudo tee /opt/nautilus/secrets.json > /dev/null
+  sudo chmod 644 /opt/nautilus/secrets.json
+fi
+
 # Download EIF file from S3
 echo "Downloading EIF file from S3..."
 EIF_S3_PATH="s3://${s3_bucket}/${eif_path}/nitro-${eif_version}.eif"
