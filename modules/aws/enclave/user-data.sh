@@ -34,7 +34,7 @@ systemctl start amazon-ssm-agent && systemctl enable amazon-ssm-agent
 retry 3 yum install -y amazon-cloudwatch-agent
 mkdir -p /opt/aws/amazon-cloudwatch-agent/etc
 cat >/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<CW
-{"logs":{"logs_collected":{"files":{"collect_list":[{"file_path":"/var/log/enclave-init.log","log_group_name":"$LOG_GROUP_NAME","log_stream_name":"{instance_id}/enclave-init.log","retention_in_days":7},{"file_path":"/var/log/messages","log_group_name":"$LOG_GROUP_NAME","log_stream_name":"{instance_id}/messages","retention_in_days":7},{"file_path":"/var/log/secure","log_group_name":"$LOG_GROUP_NAME","log_stream_name":"{instance_id}/secure","retention_in_days":7},{"file_path":"/var/log/cloud-init.log","log_group_name":"$LOG_GROUP_NAME","log_stream_name":"{instance_id}/cloud-init.log","retention_in_days":7},{"file_path":"/var/log/cloud-init-output.log","log_group_name":"$LOG_GROUP_NAME","log_stream_name":"{instance_id}/cloud-init-output.log","retention_in_days":7}]}}}}
+{"logs":{"logs_collected":{"files":{"collect_list":[{"file_path":"/var/log/enclave-init.log","log_group_name":"$LOG_GROUP_NAME","log_stream_name":"{instance_id}/enclave-init.log","retention_in_days":7},{"file_path":"/var/log/enclave-console.log","log_group_name":"$LOG_GROUP_NAME","log_stream_name":"{instance_id}/enclave-console.log","retention_in_days":7},{"file_path":"/var/log/messages","log_group_name":"$LOG_GROUP_NAME","log_stream_name":"{instance_id}/messages","retention_in_days":7},{"file_path":"/var/log/secure","log_group_name":"$LOG_GROUP_NAME","log_stream_name":"{instance_id}/secure","retention_in_days":7},{"file_path":"/var/log/cloud-init.log","log_group_name":"$LOG_GROUP_NAME","log_stream_name":"{instance_id}/cloud-init.log","retention_in_days":7},{"file_path":"/var/log/cloud-init-output.log","log_group_name":"$LOG_GROUP_NAME","log_stream_name":"{instance_id}/cloud-init-output.log","retention_in_days":7}]}}}}
 CW
 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
 systemctl enable amazon-cloudwatch-agent
@@ -128,6 +128,58 @@ echo "Exposing enclave port ${enclave_port} to host..."
 
 echo "Exposing enclave port ${enclave_init_port} to localhost for init endpoints..."
 \$SOCAT_CMD TCP4-LISTEN:${enclave_init_port},bind=127.0.0.1,reuseaddr,fork VSOCK-CONNECT:\$ENCLAVE_CID:${enclave_init_port} &
+
+# Start background process to capture enclave console output
+echo "Starting enclave console log capture..."
+mkdir -p /var/log
+
+# Kill any existing console capture process
+pkill -f "enclave-console-capture" || true
+sleep 1
+
+(
+  # Use a unique process name for easier management
+  exec -a "enclave-console-capture" bash -c '
+    LOG_FILE="/var/log/enclave-console.log"
+    LAST_ENCLAVE_ID=""
+    
+    while true; do
+      ENCLAVE_ID_CURRENT=\$(nitro-cli describe-enclaves 2>/dev/null | jq -r ".[0].EnclaveID // empty" || echo "")
+      
+      if [ -n "\$ENCLAVE_ID_CURRENT" ] && [ "\$ENCLAVE_ID_CURRENT" != "null" ]; then
+        # If enclave ID changed, reset (new enclave started)
+        if [ "\$ENCLAVE_ID_CURRENT" != "\$LAST_ENCLAVE_ID" ]; then
+          echo "[\$(date "+%Y-%m-%d %H:%M:%S")] Enclave started: \$ENCLAVE_ID_CURRENT" >> "\$LOG_FILE"
+          LAST_ENCLAVE_ID="\$ENCLAVE_ID_CURRENT"
+        fi
+        
+        # Capture console output with timeout (5 seconds max)
+        # Note: nitro-cli console may return all historical output, but we timestamp each line
+        timeout 5 nitro-cli console --enclave-id "\$ENCLAVE_ID_CURRENT" 2>&1 | \
+          while IFS= read -r line || [ -n "\$line" ]; do
+            # Skip empty lines
+            [ -z "\$line" ] && continue
+            # Add timestamp and write to log
+            echo "[\$(date "+%Y-%m-%d %H:%M:%S")] \$line" >> "\$LOG_FILE"
+          done || true
+      else
+        # No enclave running
+        if [ -n "\$LAST_ENCLAVE_ID" ]; then
+          echo "[\$(date "+%Y-%m-%d %H:%M:%S")] Enclave stopped (was: \$LAST_ENCLAVE_ID)" >> "\$LOG_FILE"
+          LAST_ENCLAVE_ID=""
+        fi
+      fi
+      
+      # Sleep before next capture (30 seconds)
+      sleep 30
+    done
+  '
+) &
+
+CONSOLE_CAPTURE_PID=\$!
+echo "✅ Enclave console log capture started (PID: \$CONSOLE_CAPTURE_PID)"
+echo "   Logs will be written to: /var/log/enclave-console.log"
+echo "   This includes all [RUN_SH] messages from the enclave"
 
 echo "Enclave ports exposed successfully"
 EXPOSE_SCRIPT
