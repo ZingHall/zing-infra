@@ -47,68 +47,16 @@ echo "Creating enclave directory..."
 mkdir -p /opt/nautilus
 cd /opt/nautilus
 
-# Download expose_enclave.sh script from S3 or create minimal version
-if [ ! -f "/opt/nautilus/expose_enclave.sh" ]; then
-  echo "Downloading expose_enclave.sh from S3..."
-  EXPOSE_SCRIPT_S3="s3://${s3_bucket}/${eif_path}/expose_enclave.sh"
-  if retry 3 aws s3 cp "$EXPOSE_SCRIPT_S3" /opt/nautilus/expose_enclave.sh 2>/dev/null; then
-    echo "✅ Downloaded expose_enclave.sh from S3"
-  else
-    echo "⚠️  Failed to download from S3, creating minimal version..."
-    cat > /opt/nautilus/expose_enclave.sh << 'EXPOSE_SCRIPT'
-#!/bin/bash
-ENCLAVE_ID=\$(nitro-cli describe-enclaves | jq -r '.[0].EnclaveID // empty')
-ENCLAVE_CID=\$(nitro-cli describe-enclaves | jq -r '.[0].EnclaveCID // empty')
-[ -z "\$ENCLAVE_ID" ] && exit 1
-echo "Using Enclave ID: \$ENCLAVE_ID, CID: \$ENCLAVE_CID"
-for port in ${enclave_port} ${enclave_init_port}; do
-  PIDS=\$(sudo lsof -t -i :\$port 2>/dev/null || true)
-  [ -n "\$PIDS" ] && sudo kill -9 \$PIDS || true
-done
-sleep 2
-echo "Loading mTLS client certificates from Secrets Manager..."
-MTLS_SECRET_NAME="nautilus-enclave-mtls-client-cert"
-MTLS_SECRET_VALUE=\$(timeout 10 aws secretsmanager get-secret-value --secret-id "\$MTLS_SECRET_NAME" --region ap-northeast-1 --query SecretString --output text 2>/dev/null || echo '{}')
-if [ "\$MTLS_SECRET_VALUE" != "{}" ] && [ -n "\$MTLS_SECRET_VALUE" ] && echo "\$MTLS_SECRET_VALUE" | jq empty 2>/dev/null; then
-    echo "✅ Retrieved mTLS certificates from Secrets Manager"
-    TMP_SECRETS=\$(mktemp)
-    echo "\$MTLS_SECRET_VALUE" > "\$TMP_SECRETS"
-    JQ_OUTPUT=\$(timeout 5 jq -n --slurpfile cert_json "\$TMP_SECRETS" --arg endpoint "https://watermark.internal.staging.zing.you:8080" '{MTLS_CLIENT_CERT_JSON: $cert_json[0],ECS_WATERMARK_ENDPOINT: $endpoint}' 2>&1)
-    JQ_EXIT_CODE=\$?
-    if [ \$JQ_EXIT_CODE -eq 0 ] && [ -n "\$JQ_OUTPUT" ]; then
-        [ ! -w /opt/nautilus ] && echo "\$JQ_OUTPUT" | sudo tee /opt/nautilus/secrets.json > /dev/null && sudo chmod 644 /opt/nautilus/secrets.json || echo "\$JQ_OUTPUT" > /opt/nautilus/secrets.json
-        jq empty /opt/nautilus/secrets.json 2>/dev/null || { echo "⚠️  Warning: Failed to create valid secrets.json";[ ! -w /opt/nautilus ] && echo '{}' | sudo tee /opt/nautilus/secrets.json > /dev/null || echo '{}' > /opt/nautilus/secrets.json; }
-    else
-        echo "⚠️  Warning: jq processing failed"
-        [ ! -w /opt/nautilus ] && echo '{}' | sudo tee /opt/nautilus/secrets.json > /dev/null || echo '{}' > /opt/nautilus/secrets.json
-    fi
-    rm -f "\$TMP_SECRETS"
-else
-    echo "⚠️  Failed to retrieve mTLS certificates, using empty secrets"
-    [ ! -w /opt/nautilus ] && echo '{}' | sudo tee /opt/nautilus/secrets.json > /dev/null || echo '{}' > /opt/nautilus/secrets.json
+# Download expose_enclave.sh script from S3 (required, no fallback)
+echo "Downloading expose_enclave.sh from S3..."
+EXPOSE_SCRIPT_S3="s3://${s3_bucket}/${eif_path}/expose_enclave.sh"
+if ! retry 3 aws s3 cp "$EXPOSE_SCRIPT_S3" /opt/nautilus/expose_enclave.sh; then
+  echo "❌ Failed to download expose_enclave.sh from S3: $EXPOSE_SCRIPT_S3"
+  echo "   Please ensure the script is uploaded via CI/CD or manually"
+  exit 1
 fi
-cd /opt/nautilus || exit 1
-SOCAT_CMD=\$(command -v /usr/local/bin/socat || command -v socat || echo "socat")
-echo "Sending secrets to enclave via VSOCK (port 7777)..."
-for i in {1..5}; do
-  [ ! -r /opt/nautilus/secrets.json ] && sudo cat /opt/nautilus/secrets.json | \$SOCAT_CMD - VSOCK-CONNECT:\$ENCLAVE_CID:7777 && break || cat /opt/nautilus/secrets.json | \$SOCAT_CMD - VSOCK-CONNECT:\$ENCLAVE_CID:7777 && break
-  echo "Failed to connect, retrying (\$i/5)..."
-  sleep 2
-done
-echo "Exposing enclave port ${enclave_port} to host..."
-\$SOCAT_CMD TCP4-LISTEN:${enclave_port},reuseaddr,fork VSOCK-CONNECT:\$ENCLAVE_CID:${enclave_port} &
-echo "Exposing enclave port ${enclave_init_port} to localhost..."
-\$SOCAT_CMD TCP4-LISTEN:${enclave_init_port},bind=127.0.0.1,reuseaddr,fork VSOCK-CONNECT:\$ENCLAVE_CID:${enclave_init_port} &
-echo "Starting enclave console log capture..."
-mkdir -p /var/log
-pkill -f "enclave-console-capture" || true
-sleep 1
-(exec -a "enclave-console-capture" bash -c 'LOG_FILE="/var/log/enclave-console.log";LAST_ENCLAVE_ID="";while true;do ENCLAVE_ID_CURRENT=\$(nitro-cli describe-enclaves 2>/dev/null | jq -r ".[0].EnclaveID // empty" || echo "");if [ -n "\$ENCLAVE_ID_CURRENT" ] && [ "\$ENCLAVE_ID_CURRENT" != "null" ];then if [ "\$ENCLAVE_ID_CURRENT" != "\$LAST_ENCLAVE_ID" ];then echo "[\$(date "+%Y-%m-%d %H:%M:%S")] Enclave started: \$ENCLAVE_ID_CURRENT" >> "\$LOG_FILE";LAST_ENCLAVE_ID="\$ENCLAVE_ID_CURRENT";fi;timeout 5 nitro-cli console --enclave-id "\$ENCLAVE_ID_CURRENT" 2>&1 | while IFS= read -r line || [ -n "\$line" ];do [ -z "\$line" ] && continue;echo "[\$(date "+%Y-%m-%d %H:%M:%S")] \$line" >> "\$LOG_FILE";done || true;else if [ -n "\$LAST_ENCLAVE_ID" ];then echo "[\$(date "+%Y-%m-%d %H:%M:%S")] Enclave stopped (was: \$LAST_ENCLAVE_ID)" >> "\$LOG_FILE";LAST_ENCLAVE_ID="";fi;fi;sleep 30;done') &
-echo "✅ Enclave console log capture started"
-echo "Enclave ports exposed successfully"
-EXPOSE_SCRIPT
-  chmod +x /opt/nautilus/expose_enclave.sh
-fi
+chmod +x /opt/nautilus/expose_enclave.sh
+echo "✅ Downloaded expose_enclave.sh from S3"
 
 # Download EIF file from S3
 echo "Downloading EIF file from S3..."
@@ -155,52 +103,28 @@ if retry 3 aws s3 ls "$EIF_S3_PATH" 2>/dev/null; then
       sudo mkdir -p /etc/nitro_enclaves
       [ -f /etc/nitro_enclaves/vsock-proxy.yaml ] && sudo cp /etc/nitro_enclaves/vsock-proxy.yaml /etc/nitro_enclaves/vsock-proxy.yaml.bak
       
-      if command -v python3 >/dev/null 2>&1; then
-        python3 << PYTHON_SCRIPT
-import re,sys
-yaml_file='/etc/nitro_enclaves/vsock-proxy.yaml'
-endpoints=set()
-try:
-    with open(yaml_file,'r') as f:
-        c=f.read()
-        l=c.split('\n')
-    for m in re.finditer(r'-\s*\{address:\s*([^,]+),\s*port:\s*(\d+)\}',c):
-        endpoints.add((m.group(1).strip(),m.group(2)))
-    i=0
-    while i<len(l):
-        if l[i].strip().startswith('- address:'):
-            h=l[i].split('address:')[1].strip()
-            if i+1<len(l) and 'port:' in l[i+1]:
-                endpoints.add((h,l[i+1].split('port:')[1].strip()))
-                i+=2
-                continue
-            endpoints.add((h,'443'))
-        i+=1
-except:pass
-for ep in """$ALLOWED_ENDPOINTS""".split():
-    if ep:endpoints.add((ep.split(':')[0].strip(),'443'))
-try:
-    with open(yaml_file,'w') as f:
-        f.write('allowlist:\n')
-        for h,p in sorted(endpoints):
-            f.write(f'  - address: {h}\n    port: {p}\n')
-except Exception as e:
-    print(f"Error: {e}",file=sys.stderr)
-    sys.exit(1)
-PYTHON_SCRIPT
-        [ $? -eq 0 ] && [ -f /etc/nitro_enclaves/vsock-proxy.yaml ] || echo "Python failed, using bash fallback"
+      # Create vsock-proxy.yaml using bash (no Python dependency)
+      T=$(mktemp)
+      echo "allowlist:">"$T"
+      
+      # Extract existing endpoints from backup if it exists
+      if [ -f /etc/nitro_enclaves/vsock-proxy.yaml.bak ]; then
+        sudo grep -E "^\s*-\s*\{address:" /etc/nitro_enclaves/vsock-proxy.yaml.bak 2>/dev/null | \
+          sed -E 's/.*\{address:\s*([^,]+),\s*port:\s*([0-9]+)\}.*/\1 \2/' | \
+          sort -u | while read h p; do
+            [ -n "$h" ] && printf "  - address: %s\n    port: %s\n" "$h" "${p:-443}">>"$T"
+          done
       fi
       
-      if [ ! -f /etc/nitro_enclaves/vsock-proxy.yaml ] || ! grep -q "allowlist:" /etc/nitro_enclaves/vsock-proxy.yaml 2>/dev/null; then
-        T=$(mktemp)
-        echo "allowlist:">"$T"
-        [ -f /etc/nitro_enclaves/vsock-proxy.yaml ] && sudo grep -E "^\s*-\s*\{address:" /etc/nitro_enclaves/vsock-proxy.yaml | sed -E 's/.*\{address:\s*([^,]+),\s*port:\s*([0-9]+)\}.*/\1 \2/' | sort -u | while read h p; do [ -n "$h" ] && printf "  - address: %s\n    port: %s\n" "$h" "$${p:-443}">>"$T"; done
-        for ep in $ALLOWED_ENDPOINTS; do
-          h=$(echo "$ep"|sed 's/:.*$//')
-          grep -q "address: $h" "$T" || printf "  - address: %s\n    port: 443\n" "$h">>"$T"
-        done
-        sudo mv "$T" /etc/nitro_enclaves/vsock-proxy.yaml
-      fi
+      # Add new endpoints from ALLOWED_ENDPOINTS
+      for ep in $ALLOWED_ENDPOINTS; do
+        h=$(echo "$ep"|sed 's/:.*$//')
+        p=$(echo "$ep"|sed 's/.*://')
+        [ -z "$p" ] && p=443
+        grep -q "address: $h" "$T" || printf "  - address: %s\n    port: %s\n" "$h" "$p">>"$T"
+      done
+      
+      sudo mv "$T" /etc/nitro_enclaves/vsock-proxy.yaml
       PORT=8101
       for ep in $ALLOWED_ENDPOINTS; do
         h=$(echo "$ep"|sed 's/:.*$//')
