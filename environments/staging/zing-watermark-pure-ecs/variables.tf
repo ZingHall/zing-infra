@@ -13,5 +13,5 @@ variable "tags" {
 variable "desired_count" {
   description = "Desired number of tasks"
   type        = number
-  default     = 2
+  default     = 1
 }
