@@ -49,6 +49,10 @@ data "terraform_remote_state" "network" {
 resource "aws_s3_bucket" "enclave_artifacts" {
   bucket = "zing-enclave-artifacts-staging"
 
+  # Allow Terraform to delete bucket even if it contains objects
+  # This is safe for staging environment and allows clean teardown
+  force_destroy = true
+
   tags = {
     Name        = "zing-enclave-artifacts-staging"
     Environment = "staging"
