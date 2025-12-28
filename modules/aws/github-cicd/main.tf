@@ -57,7 +57,9 @@ resource "aws_iam_role_policy" "ecr_policy" {
           "ecr:PutImage",
           "ecr:InitiateLayerUpload",
           "ecr:UploadLayerPart",
-          "ecr:CompleteLayerUpload"
+          "ecr:CompleteLayerUpload",
+          "ecr:DescribeImages",
+          "ecr:BatchDeleteImage"
         ]
         Resource = "*"
       }
@@ -78,7 +80,8 @@ resource "aws_iam_role_policy" "ecs_policy" {
           "ecs:DescribeTaskDefinition",
           "ecs:RegisterTaskDefinition",
           "ecs:DescribeServices",
-          "ecs:UpdateService"
+          "ecs:UpdateService",
+          "ecs:TagResource"
         ]
         Resource = "*"
       }

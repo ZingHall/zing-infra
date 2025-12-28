@@ -68,9 +68,12 @@ module "ecs_cluster" {
 module "ecs_role" {
   source = "../../../modules/aws/ecs-role"
 
-  name                    = "zing-indexer"
-  enable_secrets_access   = false
-  secrets_arns            = []
+  name                  = "zing-indexer"
+  enable_secrets_access = true
+  # Grant access to zing-indexer secret (using wildcard to match AWS-generated suffix)
+  secrets_arns = [
+    "arn:aws:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:zing-indexer-*"
+  ]
   ssm_parameter_arns      = []
   log_group_name          = "/ecs/zing-indexer"
   execution_role_policies = {}
