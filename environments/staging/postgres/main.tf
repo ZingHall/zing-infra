@@ -63,6 +63,16 @@ data "terraform_remote_state" "bastion-host" {
   }
 }
 
+data "terraform_remote_state" "zing-indexer" {
+  backend = "s3"
+  config = {
+    bucket  = "terraform-zing-staging"
+    key     = "zing-indexer.tfstate"
+    region  = "ap-northeast-1"
+    profile = "zing-staging"
+  }
+}
+
 # PostgreSQL Database
 module "postgres" {
   source = "../../../modules/aws/postgres"
@@ -118,9 +128,10 @@ module "postgres" {
   log_error_verbosity        = "default"
   log_min_error_statement    = "ERROR"
 
-  # Access control - allow ECS services
+  # Access control - allow ECS services and bastion host
   accessible_sg_ids = [
-    data.terraform_remote_state.bastion-host.outputs.bastion_security_group_id
+    data.terraform_remote_state.bastion-host.outputs.bastion_security_group_id,
+    data.terraform_remote_state.zing-indexer.outputs.security_group_id
   ]
 }
 
