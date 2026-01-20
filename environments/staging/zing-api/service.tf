@@ -36,9 +36,11 @@ module "ecs_cluster" {
 module "ecs_role" {
   source = "../../../modules/aws/ecs-role"
 
-  name                    = "zing-api"
-  enable_secrets_access   = false
-  secrets_arns            = []
+  name                  = "zing-api"
+  enable_secrets_access = true
+  secrets_arns = [
+    "arn:aws:secretsmanager:ap-northeast-1:287767576800:secret:zing-api-*"
+  ]
   ssm_parameter_arns      = []
   log_group_name          = "/ecs/zing-api"
   execution_role_policies = {}
