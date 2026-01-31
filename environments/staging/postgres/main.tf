@@ -140,6 +140,7 @@ module "postgres" {
 
   # Access control - allow ECS services and bastion host
   accessible_sg_ids = [
+    data.terraform_remote_state.bastion-host.outputs.bastion_security_group_id,
     data.terraform_remote_state.zing-indexer.outputs.security_group_id,
     data.terraform_remote_state.zing-api.outputs.ecs_service_sg_id
   ]
