@@ -93,7 +93,7 @@ module "ecs_service" {
   task_role_arn         = module.ecs_role.task_role_arn
   desired_count         = 1
   vpc_id                = data.terraform_remote_state.network.outputs.vpc_id
-  private_subnet_ids    = data.terraform_remote_state.network.outputs.private_subnet_ids
+  private_subnet_ids    = [data.terraform_remote_state.network.outputs.private_subnet_ids[1]]
   assign_public_ip      = false
   container_name        = "app"
   container_port        = 3000
