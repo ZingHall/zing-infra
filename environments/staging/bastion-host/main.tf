@@ -57,7 +57,7 @@ module "bastion_host" {
 
   name      = "staging-bastion"
   vpc_id    = data.terraform_remote_state.network.outputs.vpc_id
-  subnet_id = data.terraform_remote_state.network.outputs.public_subnet_ids[0]
+  subnet_id = data.terraform_remote_state.network.outputs.public_subnet_ids[1]
 
   private_subnet_route_table_map = local.private_subnet_route_table_map
 

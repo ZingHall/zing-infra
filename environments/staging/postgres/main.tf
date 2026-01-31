@@ -109,7 +109,7 @@ module "postgres" {
 
   # High availability - disabled for cost savings
   multi_az           = false # Single AZ saves ~50% cost
-  availability_zone  = null
+  availability_zone  = data.terraform_remote_state.network.outputs.availability_zones[1]
   ca_cert_identifier = null
 
   # Backup settings - reduced for staging
@@ -140,7 +140,6 @@ module "postgres" {
 
   # Access control - allow ECS services and bastion host
   accessible_sg_ids = [
-    data.terraform_remote_state.bastion-host.outputs.bastion_security_group_id,
     data.terraform_remote_state.zing-indexer.outputs.security_group_id,
     data.terraform_remote_state.zing-api.outputs.ecs_service_sg_id
   ]
