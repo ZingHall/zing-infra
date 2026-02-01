@@ -59,7 +59,7 @@ module "ecs_cluster" {
   source = "../../../modules/aws/ecs-cluster"
 
   name                               = "zing-indexer"
-  container_insights_enabled         = true
+  container_insights_enabled         = false
   capacity_providers                 = ["FARGATE", "FARGATE_SPOT"]
   default_capacity_provider_strategy = []
 }

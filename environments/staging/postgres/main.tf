@@ -83,6 +83,16 @@ data "terraform_remote_state" "zing-api" {
   }
 }
 
+data "terraform_remote_state" "zing-file-server" {
+  backend = "s3"
+  config = {
+    bucket  = "terraform-zing-staging"
+    key     = "zing-file-server.tfstate"
+    region  = "ap-northeast-1"
+    profile = "zing-staging"
+  }
+}
+
 # PostgreSQL Database
 module "postgres" {
   source = "../../../modules/aws/postgres"
@@ -142,7 +152,8 @@ module "postgres" {
   accessible_sg_ids = [
     data.terraform_remote_state.bastion-host.outputs.bastion_security_group_id,
     data.terraform_remote_state.zing-indexer.outputs.security_group_id,
-    data.terraform_remote_state.zing-api.outputs.ecs_service_sg_id
+    data.terraform_remote_state.zing-api.outputs.ecs_service_sg_id,
+    data.terraform_remote_state.zing-file-server.outputs.security_group_id
   ]
 }
 
