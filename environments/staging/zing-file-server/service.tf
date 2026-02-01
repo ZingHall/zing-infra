@@ -62,7 +62,7 @@ resource "aws_ecs_service" "file_server" {
   }
 
   network_configuration {
-    subnets          = data.terraform_remote_state.network.outputs.private_subnet_ids
+    subnets          = [data.terraform_remote_state.network.outputs.private_subnet_ids[1]]
     security_groups  = [aws_security_group.ecs_file_server.id]
     assign_public_ip = false
   }
