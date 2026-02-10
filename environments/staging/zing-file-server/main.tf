@@ -89,7 +89,22 @@ module "ecs_role" {
   ssm_parameter_arns      = []
   log_group_name          = "/ecs/zing-file-server"
   execution_role_policies = {}
-  task_role_policies      = {}
+  task_role_policies = {
+    s3-access = jsonencode({
+      Version = "2012-10-17"
+      Statement = [
+        {
+          Effect = "Allow"
+          Action = [
+            "s3:PutObject",
+            "s3:GetObject",
+            "s3:DeleteObject"
+          ]
+          Resource = "arn:aws:s3:::zing-staging-static-assets/*"
+        }
+      ]
+    })
+  }
 }
 
 # HTTPS ALB
