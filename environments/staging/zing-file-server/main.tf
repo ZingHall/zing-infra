@@ -89,7 +89,22 @@ module "ecs_role" {
   ssm_parameter_arns      = []
   log_group_name          = "/ecs/zing-file-server"
   execution_role_policies = {}
-  task_role_policies      = {}
+  task_role_policies = {
+    s3-access = jsonencode({
+      Version = "2012-10-17"
+      Statement = [
+        {
+          Effect = "Allow"
+          Action = [
+            "s3:PutObject",
+            "s3:GetObject",
+            "s3:DeleteObject"
+          ]
+          Resource = "arn:aws:s3:::zing-staging-static-assets/*"
+        }
+      ]
+    })
+  }
 }
 
 # HTTPS ALB
@@ -106,7 +121,7 @@ module "https_alb" {
     port                             = 8080
     host_headers                     = [local.domain_name]
     priority                         = 100
-    health_check_path                = "/health_check"
+    health_check_path                = "/health"
     health_check_matcher             = "200"
     health_check_interval            = 30
     health_check_timeout             = 5

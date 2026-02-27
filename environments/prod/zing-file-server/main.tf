@@ -1,5 +1,50 @@
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.54.1"
+    }
+  }
+
+  backend "s3" {
+    bucket         = "terraform-zing-prod"
+    key            = "zing-file-server.tfstate"
+    region         = "ap-northeast-1"
+    encrypt        = true
+    dynamodb_table = "terraform-lock-table"
+    profile        = "zing-prod"
+  }
+}
+
+provider "aws" {
+  region  = "ap-northeast-1"
+  profile = "zing-prod"
+
+  default_tags {
+    tags = {
+      environment = "prod"
+      module      = "zing-file-server"
+      managed_by  = "terraform"
+    }
+  }
+}
+
+# Get network outputs
+data "terraform_remote_state" "network" {
+  backend = "s3"
+  config = {
+    bucket  = "terraform-zing-prod"
+    key     = "network.tfstate"
+    region  = "ap-northeast-1"
+    profile = "zing-prod"
+  }
+}
+
 locals {
-  domain_name = "api.staging.zing.you"
+  domain_name = "files.prod.zing.you"
 }
 
 # ACM Certificate
@@ -15,7 +60,7 @@ module "acm_cert" {
 module "ecr" {
   source = "../../../modules/aws/ecr"
 
-  name                 = "zing-api"
+  name                 = "zing-file-server"
   image_tag_mutability = "IMMUTABLE"
   scan_on_push         = true
   count_number         = 10
@@ -26,23 +71,23 @@ module "ecr" {
 module "ecs_cluster" {
   source = "../../../modules/aws/ecs-cluster"
 
-  name                               = "zing-api"
+  name                               = "zing-file-server"
   container_insights_enabled         = false
   capacity_providers                 = ["FARGATE", "FARGATE_SPOT"]
   default_capacity_provider_strategy = []
 }
 
-# ECS Role
+# ECS Role (with secrets access for SUI_PRIVATE_KEY, HMAC_SECRET, DATABASE_URL)
 module "ecs_role" {
   source = "../../../modules/aws/ecs-role"
 
-  name                  = "zing-api"
+  name                  = "zing-file-server"
   enable_secrets_access = true
   secrets_arns = [
-    "arn:aws:secretsmanager:ap-northeast-1:287767576800:secret:zing-api-*"
+    "arn:aws:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:zing-file-server-*"
   ]
   ssm_parameter_arns      = []
-  log_group_name          = "/ecs/zing-api"
+  log_group_name          = "/ecs/zing-file-server"
   execution_role_policies = {}
   task_role_policies = {
     s3-access = jsonencode({
@@ -55,7 +100,7 @@ module "ecs_role" {
             "s3:GetObject",
             "s3:DeleteObject"
           ]
-          Resource = "arn:aws:s3:::zing-staging-static-assets/*"
+          Resource = "arn:aws:s3:::zing-prod-static-assets/*"
         }
       ]
     })
@@ -66,18 +111,18 @@ module "ecs_role" {
 module "https_alb" {
   source = "../../../modules/aws/https-alb"
 
-  name            = "zing-api"
+  name            = "zing-file-server"
   vpc_id          = data.terraform_remote_state.network.outputs.vpc_id
   subnet_ids      = data.terraform_remote_state.network.outputs.public_subnet_ids
   certificate_arn = module.acm_cert.cert_arn
 
   services = [{
-    name                             = "zing-api"
-    port                             = 3000
+    name                             = "zing-file-server"
+    port                             = 8080
     host_headers                     = [local.domain_name]
     priority                         = 100
     health_check_path                = "/health"
-    health_check_matcher             = "200-399"
+    health_check_matcher             = "200"
     health_check_interval            = 30
     health_check_timeout             = 5
     health_check_healthy_threshold   = 2
@@ -94,38 +139,4 @@ module "https_alb" {
   additional_certificate_arns = []
   access_log_bucket           = ""
   access_log_prefix           = ""
-}
-
-# ECS Service
-module "ecs_service" {
-  source = "../../../modules/aws/ecs-service"
-
-  name                  = "zing-api"
-  cluster_id            = module.ecs_cluster.cluster_id
-  alb_security_group_id = module.https_alb.alb_security_group_id
-  target_group_arn      = module.https_alb.target_group_arns["zing-api"]
-  execution_role_arn    = module.ecs_role.execution_role_arn
-  task_role_arn         = module.ecs_role.task_role_arn
-  desired_count         = 1
-  vpc_id                = data.terraform_remote_state.network.outputs.vpc_id
-  private_subnet_ids    = [data.terraform_remote_state.network.outputs.private_subnet_ids[1]]
-  assign_public_ip      = false
-  container_name        = "app"
-  container_port        = 3000
-  task_cpu              = 256
-  task_memory           = 512
-  log_group_name        = module.ecs_role.log_group_name
-}
-
-# Route53 Record
-resource "aws_route53_record" "api" {
-  zone_id = data.terraform_remote_state.network.outputs.hosted_zone_id
-  name    = local.domain_name
-  type    = "A"
-
-  alias {
-    name                   = module.https_alb.alb_dns_name
-    zone_id                = module.https_alb.alb_zone_id
-    evaluate_target_health = true
-  }
 }

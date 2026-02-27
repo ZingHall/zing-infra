@@ -1,5 +1,5 @@
 locals {
-  domain_name = "api.staging.zing.you"
+  domain_name = "api.prod.zing.you"
 }
 
 # ACM Certificate
@@ -39,7 +39,7 @@ module "ecs_role" {
   name                  = "zing-api"
   enable_secrets_access = true
   secrets_arns = [
-    "arn:aws:secretsmanager:ap-northeast-1:287767576800:secret:zing-api-*"
+    "arn:aws:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:zing-api-*"
   ]
   ssm_parameter_arns      = []
   log_group_name          = "/ecs/zing-api"
@@ -55,7 +55,7 @@ module "ecs_role" {
             "s3:GetObject",
             "s3:DeleteObject"
           ]
-          Resource = "arn:aws:s3:::zing-staging-static-assets/*"
+          Resource = "arn:aws:s3:::zing-prod-static-assets/*"
         }
       ]
     })

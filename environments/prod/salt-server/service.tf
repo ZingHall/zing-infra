@@ -1,5 +1,5 @@
 locals {
-  domain_name = "api.staging.zing.you"
+  domain_name = "salt.prod.zing.you"
 }
 
 # ACM Certificate
@@ -15,7 +15,7 @@ module "acm_cert" {
 module "ecr" {
   source = "../../../modules/aws/ecr"
 
-  name                 = "zing-api"
+  name                 = "salt-server"
   image_tag_mutability = "IMMUTABLE"
   scan_on_push         = true
   count_number         = 10
@@ -26,7 +26,7 @@ module "ecr" {
 module "ecs_cluster" {
   source = "../../../modules/aws/ecs-cluster"
 
-  name                               = "zing-api"
+  name                               = "salt-server"
   container_insights_enabled         = false
   capacity_providers                 = ["FARGATE", "FARGATE_SPOT"]
   default_capacity_provider_strategy = []
@@ -36,44 +36,29 @@ module "ecs_cluster" {
 module "ecs_role" {
   source = "../../../modules/aws/ecs-role"
 
-  name                  = "zing-api"
+  name                  = "salt-server"
   enable_secrets_access = true
   secrets_arns = [
-    "arn:aws:secretsmanager:ap-northeast-1:287767576800:secret:zing-api-*"
+    "arn:aws:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:salt-server-*"
   ]
   ssm_parameter_arns      = []
-  log_group_name          = "/ecs/zing-api"
+  log_group_name          = "/ecs/salt-server"
   execution_role_policies = {}
-  task_role_policies = {
-    s3-access = jsonencode({
-      Version = "2012-10-17"
-      Statement = [
-        {
-          Effect = "Allow"
-          Action = [
-            "s3:PutObject",
-            "s3:GetObject",
-            "s3:DeleteObject"
-          ]
-          Resource = "arn:aws:s3:::zing-staging-static-assets/*"
-        }
-      ]
-    })
-  }
+  task_role_policies      = {}
 }
 
 # HTTPS ALB
 module "https_alb" {
   source = "../../../modules/aws/https-alb"
 
-  name            = "zing-api"
+  name            = "salt-server"
   vpc_id          = data.terraform_remote_state.network.outputs.vpc_id
   subnet_ids      = data.terraform_remote_state.network.outputs.public_subnet_ids
   certificate_arn = module.acm_cert.cert_arn
 
   services = [{
-    name                             = "zing-api"
-    port                             = 3000
+    name                             = "salt-server"
+    port                             = 3001
     host_headers                     = [local.domain_name]
     priority                         = 100
     health_check_path                = "/health"
@@ -100,10 +85,10 @@ module "https_alb" {
 module "ecs_service" {
   source = "../../../modules/aws/ecs-service"
 
-  name                  = "zing-api"
+  name                  = "salt-server"
   cluster_id            = module.ecs_cluster.cluster_id
   alb_security_group_id = module.https_alb.alb_security_group_id
-  target_group_arn      = module.https_alb.target_group_arns["zing-api"]
+  target_group_arn      = module.https_alb.target_group_arns["salt-server"]
   execution_role_arn    = module.ecs_role.execution_role_arn
   task_role_arn         = module.ecs_role.task_role_arn
   desired_count         = 1
@@ -111,14 +96,14 @@ module "ecs_service" {
   private_subnet_ids    = [data.terraform_remote_state.network.outputs.private_subnet_ids[1]]
   assign_public_ip      = false
   container_name        = "app"
-  container_port        = 3000
+  container_port        = 3001
   task_cpu              = 256
   task_memory           = 512
   log_group_name        = module.ecs_role.log_group_name
 }
 
 # Route53 Record
-resource "aws_route53_record" "api" {
+resource "aws_route53_record" "salt" {
   zone_id = data.terraform_remote_state.network.outputs.hosted_zone_id
   name    = local.domain_name
   type    = "A"
