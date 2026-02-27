@@ -121,7 +121,7 @@ module "https_alb" {
     port                             = 8080
     host_headers                     = [local.domain_name]
     priority                         = 100
-    health_check_path                = "/health_check"
+    health_check_path                = "/health"
     health_check_matcher             = "200"
     health_check_interval            = 30
     health_check_timeout             = 5
