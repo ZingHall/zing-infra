@@ -43,55 +43,13 @@ data "terraform_remote_state" "network" {
   }
 }
 
-data "terraform_remote_state" "zing-web" {
-  backend = "s3"
-  config = {
-    bucket  = "terraform-zing-staging"
-    key     = "zing-web.tfstate"
-    region  = "ap-northeast-1"
-    profile = "zing-staging"
-  }
-}
-
-data "terraform_remote_state" "bastion-host" {
-  backend = "s3"
-  config = {
-    bucket  = "terraform-zing-staging"
-    key     = "bastion-host.tfstate"
-    region  = "ap-northeast-1"
-    profile = "zing-staging"
-  }
-}
-
-data "terraform_remote_state" "zing-indexer" {
-  backend = "s3"
-  config = {
-    bucket  = "terraform-zing-staging"
-    key     = "zing-indexer.tfstate"
-    region  = "ap-northeast-1"
-    profile = "zing-staging"
-  }
-}
-
-data "terraform_remote_state" "zing-api" {
-  backend = "s3"
-  config = {
-    bucket  = "terraform-zing-staging"
-    key     = "zing-api.tfstate"
-    region  = "ap-northeast-1"
-    profile = "zing-staging"
-  }
-}
-
-data "terraform_remote_state" "zing-file-server" {
-  backend = "s3"
-  config = {
-    bucket  = "terraform-zing-staging"
-    key     = "zing-file-server.tfstate"
-    region  = "ap-northeast-1"
-    profile = "zing-staging"
-  }
-}
+# Remote state references removed - staging services torn down to save costs
+# Re-add when bringing staging services back up:
+# data "terraform_remote_state" "zing-web" { ... }
+# data "terraform_remote_state" "bastion-host" { ... }
+# data "terraform_remote_state" "zing-indexer" { ... }
+# data "terraform_remote_state" "zing-api" { ... }
+# data "terraform_remote_state" "zing-file-server" { ... }
 
 # PostgreSQL Database
 module "postgres" {
@@ -148,12 +106,7 @@ module "postgres" {
   log_error_verbosity        = "default"
   log_min_error_statement    = "ERROR"
 
-  # Access control - allow ECS services and bastion host
-  accessible_sg_ids = [
-    data.terraform_remote_state.bastion-host.outputs.bastion_security_group_id,
-    data.terraform_remote_state.zing-indexer.outputs.security_group_id,
-    data.terraform_remote_state.zing-api.outputs.ecs_service_sg_id,
-    data.terraform_remote_state.zing-file-server.outputs.security_group_id
-  ]
+  # Access control - cleared while staging services are torn down
+  accessible_sg_ids = []
 }
 
